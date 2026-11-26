@@ -343,6 +343,7 @@ fun EditorScreen(plan: Plan, onSave: (Plan) -> Unit, onBack: () -> Unit) {
                             var rawH = 0.0
                             var axis = 0
                             var edge: EdgeHit? = null
+                            var own: OwnEdge? = null
                             var chain = Pair(0.0, 0.0)
                             val cur = snapFloor.els.firstOrNull { it.id == selId }
                             val oh = outerHandle(start)
@@ -358,8 +359,12 @@ fun EditorScreen(plan: Plan, onSave: (Plan) -> Unit, onBack: () -> Unit) {
                                     mode = 1; targetId = hit.id; selId = hit.id; rawX = hit.x; rawY = hit.y
                                 } else {
                                     val tol = (14f * density / scale).toDouble()
+                                    val selR = snapFloor.rooms.firstOrNull { it.id == selId }
+                                    val oe = if (selR != null) findOwnEdge(snapPlan, selR, wx0, wy0, tol) else null
                                     val eh = findEdge(snapPlan, snapFloor, wx0, wy0, tol)
-                                    if (eh != null) {
+                                    if (oe != null) {
+                                        mode = 5; own = oe; raw = oe.pos
+                                    } else if (eh != null) {
                                         mode = 3; edge = eh; chain = chainOf(snapFloor.rooms, eh); raw = eh.pos
                                     }
                                 }
@@ -440,6 +445,16 @@ fun EditorScreen(plan: Plan, onSave: (Plan) -> Unit, onBack: () -> Unit) {
                                                         val mv = moveLine(snapFloor.rooms, eh, chain, snapTo(raw, st))
                                                         val nels = shiftOpenings(snapFloor.els, eh, chain, mv.pos - eh.pos)
                                                         p = snapPlan.copy(floors = snapPlan.floors.mapIndexed { i, x -> if (i == gi) snapFloor.copy(rooms = mv.rooms, els = nels) else x })
+                                                    }
+                                                }
+                                                5 -> {
+                                                    val oe = own
+                                                    val rid = selId
+                                                    if (oe != null && rid != null) {
+                                                        if (!pushed) { pushUndo(); pushed = true }
+                                                        raw += (if (oe.vertical) step.x else step.y) / scale.toDouble()
+                                                        val nr = moveSingle(snapPlan, snapFloor.rooms, rid, oe, snapTo(raw, st))
+                                                        p = snapPlan.copy(floors = snapPlan.floors.mapIndexed { i, x -> if (i == gi) snapFloor.copy(rooms = nr) else x })
                                                     }
                                                 }
                                                 4 -> {

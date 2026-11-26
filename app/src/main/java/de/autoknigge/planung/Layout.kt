@@ -313,3 +313,48 @@ fun carveCorner(p: Plan, f: Floor, id: String, netW: Double, netD: Double, left:
     )
     return f.copy(rooms = f.rooms.flatMap { if (it.id == id) listOf(main, piece, under) else listOf(it) })
 }
+
+/** Einzelne Kante eines Raums: senkrecht/waagerecht und ob es die hintere (rechte/untere) Kante ist. */
+data class OwnEdge(val vertical: Boolean, val high: Boolean, val pos: Double)
+
+/** Trifft der Punkt eine innere Kante genau dieses Raums? */
+fun findOwnEdge(p: Plan, r: Room, wx: Double, wy: Double, tol: Double): OwnEdge? {
+    var best: OwnEdge? = null
+    var bd = tol
+    if (wy >= r.y0 - tol / 2 && wy <= r.y1 + tol / 2) {
+        if (!eq(r.x0, p.ix0)) { val d = abs(wx - r.x0); if (d < bd) { bd = d; best = OwnEdge(true, false, r.x0) } }
+        if (!eq(r.x1, p.ix1)) { val d = abs(wx - r.x1); if (d < bd) { bd = d; best = OwnEdge(true, true, r.x1) } }
+    }
+    if (wx >= r.x0 - tol / 2 && wx <= r.x1 + tol / 2) {
+        if (!eq(r.y0, p.iy0)) { val d = abs(wy - r.y0); if (d < bd) { bd = d; best = OwnEdge(false, false, r.y0) } }
+        if (!eq(r.y1, p.iy1)) { val d = abs(wy - r.y1); if (d < bd) { bd = d; best = OwnEdge(false, true, r.y1) } }
+    }
+    return best
+}
+
+/** Verschiebt nur die Kante eines Raums. Der Nachbar bleibt; es darf eine Lücke entstehen, aber keine Überlappung. */
+fun moveSingle(p: Plan, rooms: List<Room>, id: String, e: OwnEdge, newPos: Double): List<Room> {
+    val r = rooms.firstOrNull { it.id == id } ?: return rooms
+    val lo = if (e.vertical) r.x0 else r.y0
+    val hi = if (e.vertical) r.x1 else r.y1
+    var minV = if (e.high) lo + MIN_ROOM else (if (e.vertical) p.ix0 else p.iy0)
+    var maxV = if (e.high) (if (e.vertical) p.ix1 else p.iy1) else hi - MIN_ROOM
+    val s0 = if (e.vertical) r.y0 else r.x0
+    val s1 = if (e.vertical) r.y1 else r.x1
+    for (o in rooms) {
+        if (o.id == id) continue
+        val o0 = if (e.vertical) o.y0 else o.x0
+        val o1 = if (e.vertical) o.y1 else o.x1
+        if (!(o0 < s1 - EPS && o1 > s0 + EPS)) continue
+        val olo = if (e.vertical) o.x0 else o.y0
+        val ohi = if (e.vertical) o.x1 else o.y1
+        if (e.high && olo >= e.pos - EPS) maxV = min(maxV, olo)
+        if (!e.high && ohi <= e.pos + EPS) minV = max(minV, ohi)
+    }
+    val np = if (minV > maxV) e.pos else clampD(newPos, minV, maxV)
+    return rooms.map {
+        if (it.id != id) it
+        else if (e.vertical) (if (e.high) it.copy(x1 = np) else it.copy(x0 = np))
+        else (if (e.high) it.copy(y1 = np) else it.copy(y0 = np))
+    }
+}
