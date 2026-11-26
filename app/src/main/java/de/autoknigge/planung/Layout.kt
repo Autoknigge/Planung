@@ -317,17 +317,17 @@ fun carveCorner(p: Plan, f: Floor, id: String, netW: Double, netD: Double, left:
 /** Einzelne Kante eines Raums: senkrecht/waagerecht und ob es die hintere (rechte/untere) Kante ist. */
 data class OwnEdge(val vertical: Boolean, val high: Boolean, val pos: Double)
 
-/** Trifft der Punkt eine innere Kante genau dieses Raums? */
+/** Trifft der Punkt eine Kante genau dieses Raums (auch die zur Außenwand)? */
 fun findOwnEdge(p: Plan, r: Room, wx: Double, wy: Double, tol: Double): OwnEdge? {
     var best: OwnEdge? = null
     var bd = tol
     if (wy >= r.y0 - tol / 2 && wy <= r.y1 + tol / 2) {
-        if (!eq(r.x0, p.ix0)) { val d = abs(wx - r.x0); if (d < bd) { bd = d; best = OwnEdge(true, false, r.x0) } }
-        if (!eq(r.x1, p.ix1)) { val d = abs(wx - r.x1); if (d < bd) { bd = d; best = OwnEdge(true, true, r.x1) } }
+        run { val d = abs(wx - r.x0); if (d < bd) { bd = d; best = OwnEdge(true, false, r.x0) } }
+        run { val d = abs(wx - r.x1); if (d < bd) { bd = d; best = OwnEdge(true, true, r.x1) } }
     }
     if (wx >= r.x0 - tol / 2 && wx <= r.x1 + tol / 2) {
-        if (!eq(r.y0, p.iy0)) { val d = abs(wy - r.y0); if (d < bd) { bd = d; best = OwnEdge(false, false, r.y0) } }
-        if (!eq(r.y1, p.iy1)) { val d = abs(wy - r.y1); if (d < bd) { bd = d; best = OwnEdge(false, true, r.y1) } }
+        run { val d = abs(wy - r.y0); if (d < bd) { bd = d; best = OwnEdge(false, false, r.y0) } }
+        run { val d = abs(wy - r.y1); if (d < bd) { bd = d; best = OwnEdge(false, true, r.y1) } }
     }
     return best
 }
