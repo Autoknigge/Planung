@@ -44,16 +44,18 @@ data class El(
     val sub: Int = 0
 )
 
-/** Raum als Rechteck zwischen den Wandachsen (Meter). Die Räume eines Geschosses füllen die Außenhülle lückenlos. */
+data class Pt(val x: Double, val y: Double)
+
+/** Raum als Vieleck; die Ecken liegen auf den Wandachsen (Meter). Räume teilen sich Ecken und Wände. */
 data class Room(
     val id: String = UUID.randomUUID().toString(),
     val name: String = "Raum",
-    val x0: Double,
-    val y0: Double,
-    val x1: Double,
-    val y1: Double,
+    val pts: List<Pt>,
     val color: Int = 0
 )
+
+fun rectPts(x0: Double, y0: Double, x1: Double, y1: Double): List<Pt> =
+    listOf(Pt(x0, y0), Pt(x1, y0), Pt(x1, y1), Pt(x0, y1))
 
 data class Floor(
     val id: String = UUID.randomUUID().toString(),
@@ -66,14 +68,11 @@ data class Floor(
 )
 
 fun defaultFloors(w: Double, d: Double, t: Double): List<Floor> =
-    listOf(Floor(rooms = listOf(Room(x0 = t, y0 = t, x1 = w - t, y1 = d - t))))
+    listOf(Floor(rooms = listOf(Room(pts = rectPts(t / 2, t / 2, w - t / 2, d - t / 2)))))
 
 data class Plan(
     val id: String = UUID.randomUUID().toString(),
     val name: String,
-    /** Außenmaße des Hauses in Metern (mit Außenwänden). */
-    val w: Double = 10.0,
-    val d: Double = 8.0,
     val outerT: Double = 0.30,
     val innerT: Double = 0.15,
     val roof: RoofType = RoofType.GABLE,
@@ -81,30 +80,35 @@ data class Plan(
     val overhang: Double = 0.5,
     /** First parallel zur Breite (x-Richtung) bei Sattel- und Pultdach. */
     val ridgeX: Boolean = true,
-    val floors: List<Floor> = defaultFloors(w, d, outerT),
+    val floors: List<Floor> = defaultFloors(10.0, 8.0, outerT),
     val setup: Boolean = false,
     val updated: Long = System.currentTimeMillis()
 ) {
-    val ix0: Double get() = outerT
-    val iy0: Double get() = outerT
-    val ix1: Double get() = w - outerT
-    val iy1: Double get() = d - outerT
+    /** Umgebendes Rechteck der Wandachsen aller Geschosse: minX, minY, maxX, maxY. */
+    private val box: DoubleArray
+        get() {
+            var x0 = Double.MAX_VALUE
+            var y0 = Double.MAX_VALUE
+            var x1 = -Double.MAX_VALUE
+            var y1 = -Double.MAX_VALUE
+            for (f in floors) for (r in f.rooms) for (q in r.pts) {
+                x0 = min(x0, q.x); x1 = max(x1, q.x); y0 = min(y0, q.y); y1 = max(y1, q.y)
+            }
+            return if (x0 > x1) doubleArrayOf(outerT / 2, outerT / 2, 10.0 - outerT / 2, 8.0 - outerT / 2) else doubleArrayOf(x0, y0, x1, y1)
+        }
+
+    /** Linke und obere Außenkante des Hauses (Außenfläche der Wand). */
+    val bx: Double get() = box[0] - outerT / 2
+    val by: Double get() = box[1] - outerT / 2
+
+    /** Außenmaße des Hauses. */
+    val w: Double get() = box[2] - box[0] + outerT
+    val d: Double get() = box[3] - box[1] + outerT
 
     /** Wohnfläche (lichte Raummaße) aller Geschosse. */
-    val roomArea: Double
-        get() = floors.sumOf { f -> f.rooms.sumOf { r -> net(r).let { it.first * it.second } } }
+    val roomArea: Double get() = floors.sumOf { areaOf(it) }
 
-    fun areaOf(f: Floor): Double = f.rooms.sumOf { r -> net(r).let { it.first * it.second } }
-
-    /** Lichte Breite und Tiefe eines Raums (halbe Innenwand abgezogen). */
-    fun net(r: Room): Pair<Double, Double> {
-        val h = innerT / 2
-        val a = if (kotlin.math.abs(r.x0 - ix0) < EPS) 0.0 else h
-        val b = if (kotlin.math.abs(r.x1 - ix1) < EPS) 0.0 else h
-        val c = if (kotlin.math.abs(r.y0 - iy0) < EPS) 0.0 else h
-        val e = if (kotlin.math.abs(r.y1 - iy1) < EPS) 0.0 else h
-        return Pair(max(0.0, r.x1 - r.x0 - a - b), max(0.0, r.y1 - r.y0 - c - e))
-    }
+    fun areaOf(f: Floor): Double = f.rooms.sumOf { roomNet(this, f, it).area }
 }
 
 data class FurnType(val name: String, val w: Double, val h: Double)
@@ -193,11 +197,11 @@ object Store {
             if (n.kind == Kind.FURN && n.name == "Treppe") n = n.copy(kind = Kind.STAIR)
             n
         }
-        val floor = Floor(rooms = listOf(Room(x0 = t, y0 = t, x1 = w - t, y1 = d - t)), els = els)
+        val floor = Floor(rooms = listOf(Room(pts = rectPts(t / 2, t / 2, w - t / 2, d - t / 2))), els = els)
         return Plan(
             id = o.optString("id", UUID.randomUUID().toString()),
             name = o.optString("name", "Plan"),
-            w = w, d = d, outerT = t, floors = listOf(floor), setup = true,
+            outerT = t, floors = listOf(floor), setup = true,
             updated = o.optLong("updated", 0L)
         )
     }
@@ -227,14 +231,25 @@ object Store {
                         val fo = fa.getJSONObject(k)
                         val rooms = mutableListOf<Room>()
                         val ra = fo.optJSONArray("rooms") ?: JSONArray()
+                        val oT = o.optDouble("outerT", 0.30)
+                        val oW = o.optDouble("w", 10.0)
+                        val oD = o.optDouble("d", 8.0)
                         for (j in 0 until ra.length()) {
                             val r = ra.getJSONObject(j)
+                            val pa = r.optJSONArray("pts")
+                            val pts: List<Pt> = if (pa != null) {
+                                List(pa.length()) { k -> pa.getJSONArray(k).let { q -> Pt(q.getDouble(0), q.getDouble(1)) } }
+                            } else {
+                                // älteres Format: Rechteck an der Innenseite der Außenwände -> Wandachsen
+                                fun cx(v: Double) = if (kotlin.math.abs(v - oT) < 0.003) oT / 2 else if (kotlin.math.abs(v - (oW - oT)) < 0.003) oW - oT / 2 else v
+                                fun cy(v: Double) = if (kotlin.math.abs(v - oT) < 0.003) oT / 2 else if (kotlin.math.abs(v - (oD - oT)) < 0.003) oD - oT / 2 else v
+                                rectPts(cx(r.optDouble("x0")), cy(r.optDouble("y0")), cx(r.optDouble("x1")), cy(r.optDouble("y1")))
+                            }
                             rooms.add(
                                 Room(
                                     id = r.optString("id", UUID.randomUUID().toString()),
                                     name = r.optString("name", "Raum"),
-                                    x0 = r.optDouble("x0"), y0 = r.optDouble("y0"),
-                                    x1 = r.optDouble("x1"), y1 = r.optDouble("y1"),
+                                    pts = pts,
                                     color = r.optInt("color", 0)
                                 )
                             )
@@ -261,8 +276,6 @@ object Store {
                         Plan(
                             id = o.optString("id", UUID.randomUUID().toString()),
                             name = o.optString("name", "Plan"),
-                            w = o.optDouble("w", 10.0),
-                            d = o.optDouble("d", 8.0),
                             outerT = o.optDouble("outerT", 0.30),
                             innerT = o.optDouble("innerT", 0.15),
                             roof = enumOr(o.optString("roof", "GABLE"), RoofType.GABLE),
@@ -305,8 +318,6 @@ object Store {
                 o.put("id", p.id)
                 o.put("name", p.name)
                 o.put("updated", p.updated)
-                o.put("w", p.w)
-                o.put("d", p.d)
                 o.put("outerT", p.outerT)
                 o.put("innerT", p.innerT)
                 o.put("roof", p.roof.name)
@@ -326,11 +337,10 @@ object Store {
                         val j = JSONObject()
                         j.put("id", r.id)
                         j.put("name", r.name)
-                        j.put("x0", r.x0)
-                        j.put("y0", r.y0)
-                        j.put("x1", r.x1)
-                        j.put("y1", r.y1)
                         j.put("color", r.color)
+                        val pa = JSONArray()
+                        for (q in r.pts) pa.put(JSONArray().put(q.x).put(q.y))
+                        j.put("pts", pa)
                         ra.put(j)
                     }
                     fo.put("rooms", ra)

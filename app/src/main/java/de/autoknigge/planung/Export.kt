@@ -23,10 +23,10 @@ import kotlin.math.min
 object Export {
     /** Ein Geschoss als Bild, mit Außenmaßen. */
     fun renderFloor(plan: Plan, fi: Int, maxPx: Int = 2400): Bitmap {
-        val x0 = -2.2
-        val y0 = -2.2
-        val wm = plan.w + 0.6 - x0
-        val hm = plan.d + 0.6 - y0
+        val x0 = plan.bx - 2.2
+        val y0 = plan.by - 2.2
+        val wm = plan.bx + plan.w + 0.6 - x0
+        val hm = plan.by + plan.d + 0.6 - y0
         val scale = min(maxPx / wm, maxPx / hm).toFloat().coerceAtMost(400f)
         val wp = max(200, (wm * scale).toInt())
         val hp = max(200, (hm * scale).toInt())

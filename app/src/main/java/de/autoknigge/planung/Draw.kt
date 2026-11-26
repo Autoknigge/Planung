@@ -10,6 +10,7 @@ import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.PathEffect
 import androidx.compose.ui.graphics.drawscope.DrawScope
 import androidx.compose.ui.graphics.drawscope.Fill
+import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.drawscope.withTransform
 import androidx.compose.ui.graphics.nativeCanvas
@@ -88,31 +89,40 @@ private fun distinct(vals: List<Double>): List<Double> {
 
 /** Außenbemaßung: Teilmaße (Wandachsen) und Gesamtlänge, oben und links. */
 private fun DrawScope.drawOuterDims(p: Plan, f: Floor, t: Tf, font: Float, line: Float) {
-    val xsRaw = mutableListOf(0.0, p.w)
-    val ysRaw = mutableListOf(0.0, p.d)
-    for (r in f.rooms) {
-        if (!eq(r.x0, p.ix0)) xsRaw.add(r.x0)
-        if (!eq(r.x1, p.ix1)) xsRaw.add(r.x1)
-        if (!eq(r.y0, p.iy0)) ysRaw.add(r.y0)
-        if (!eq(r.y1, p.iy1)) ysRaw.add(r.y1)
-    }
-    val xs = distinct(xsRaw)
-    val ys = distinct(ysRaw)
+    val allPts = f.rooms.flatMap { it.pts }
+    if (allPts.isEmpty()) return
+    val minX = allPts.minOf { it.x }
+    val maxX = allPts.maxOf { it.x }
+    val minY = allPts.minOf { it.y }
+    val maxY = allPts.maxOf { it.y }
+    val fx0 = minX - p.outerT / 2
+    val fx1 = maxX + p.outerT / 2
+    val fy0 = minY - p.outerT / 2
+    val fy1 = maxY + p.outerT / 2
+    val xs = distinct(listOf(fx0, fx1) + allPts.map { it.x }.filter { it > minX + 0.01 && it < maxX - 0.01 })
+    val ys = distinct(listOf(fy0, fy1) + allPts.map { it.y }.filter { it > minY + 0.01 && it < maxY - 0.01 })
     val ext = Color(0x661F5FA8)
     val o1 = 0.8
     val o2 = 1.5
     // oben
-    for (x in xs) drawLine(ext, Offset(t.x(x), t.y(-0.1)), Offset(t.x(x), t.y(-o2 - 0.15)), line * 0.7f)
+    for (x in xs) drawLine(ext, Offset(t.x(x), t.y(fy0 - 0.1)), Offset(t.x(x), t.y(fy0 - o2 - 0.15)), line * 0.7f)
     for (i in 0 until xs.size - 1) {
-        dimLine(Offset(t.x(xs[i]), t.y(-o1)), Offset(t.x(xs[i + 1]), t.y(-o1)), fmtM(xs[i + 1] - xs[i]), font, line)
+        dimLine(Offset(t.x(xs[i]), t.y(fy0 - o1)), Offset(t.x(xs[i + 1]), t.y(fy0 - o1)), fmtM(xs[i + 1] - xs[i]), font, line)
     }
-    dimLine(Offset(t.x(0.0), t.y(-o2)), Offset(t.x(p.w), t.y(-o2)), fmtM(p.w), font, line)
+    dimLine(Offset(t.x(fx0), t.y(fy0 - o2)), Offset(t.x(fx1), t.y(fy0 - o2)), fmtM(fx1 - fx0), font, line)
     // links
-    for (y in ys) drawLine(ext, Offset(t.x(-0.1), t.y(y)), Offset(t.x(-o2 - 0.15), t.y(y)), line * 0.7f)
+    for (y in ys) drawLine(ext, Offset(t.x(fx0 - 0.1), t.y(y)), Offset(t.x(fx0 - o2 - 0.15), t.y(y)), line * 0.7f)
     for (i in 0 until ys.size - 1) {
-        dimLine(Offset(t.x(-o1), t.y(ys[i + 1])), Offset(t.x(-o1), t.y(ys[i])), fmtM(ys[i + 1] - ys[i]), font, line)
+        dimLine(Offset(t.x(fx0 - o1), t.y(ys[i + 1])), Offset(t.x(fx0 - o1), t.y(ys[i])), fmtM(ys[i + 1] - ys[i]), font, line)
     }
-    dimLine(Offset(t.x(-o2), t.y(p.d)), Offset(t.x(-o2), t.y(0.0)), fmtM(p.d), font, line)
+    dimLine(Offset(t.x(fx0 - o2), t.y(fy1)), Offset(t.x(fx0 - o2), t.y(fy0)), fmtM(fy1 - fy0), font, line)
+}
+
+private fun DrawScope.pathOf(t: Tf, pts: List<Pt>): Path {
+    val path = Path()
+    pts.forEachIndexed { i, q -> if (i == 0) path.moveTo(t.x(q.x), t.y(q.y)) else path.lineTo(t.x(q.x), t.y(q.y)) }
+    path.close()
+    return path
 }
 
 /**
@@ -129,7 +139,8 @@ fun DrawScope.drawFloor(
     grid: Boolean,
     roomDims: Boolean,
     outerDims: Boolean,
-    gap: Room? = null
+    selVert: Pt? = null,
+    pending: List<Pt> = emptyList()
 ) {
     val f = p.floors[fi]
     val t = Tf(scale, origin)
@@ -153,16 +164,7 @@ fun DrawScope.drawFloor(
     val line = maxOf(1f, font * 0.12f)
 
     // Räume
-    for (r in f.rooms) {
-        wrect(t, r.x0, r.y0, r.x1 - r.x0, r.y1 - r.y0, ROOM_COLORS[r.color.coerceIn(0, ROOM_COLORS.size - 1)])
-    }
-    if (gap != null) {
-        drawRect(Color(0x33E57373), Offset(t.x(gap.x0), t.y(gap.y0)), Size(t.s(gap.x1 - gap.x0), t.s(gap.y1 - gap.y0)))
-        drawRect(
-            SelectColor, Offset(t.x(gap.x0), t.y(gap.y0)), Size(t.s(gap.x1 - gap.x0), t.s(gap.y1 - gap.y0)),
-            style = Stroke(maxOf(1f, font * 0.12f) * 2f, pathEffect = PathEffect.dashPathEffect(floatArrayOf(font, font * 0.6f)))
-        )
-    }
+    for (r in f.rooms) drawPath(pathOf(t, r.pts), ROOM_COLORS[r.color.coerceIn(0, ROOM_COLORS.size - 1)], style = Fill)
     // Treppe des Geschosses darunter (gestrichelt)
     if (fi > 0) {
         for (e in p.floors[fi - 1].els) {
@@ -178,60 +180,74 @@ fun DrawScope.drawFloor(
             }
         }
     }
-    // Außenwände
-    val ot = p.outerT
-    wrect(t, 0.0, 0.0, p.w, ot, WallColor)
-    wrect(t, 0.0, p.d - ot, p.w, ot, WallColor)
-    wrect(t, 0.0, 0.0, ot, p.d, WallColor)
-    wrect(t, p.w - ot, 0.0, ot, p.d, WallColor)
-    // Innenwände
-    for (s in wallSegs(p, f).drop(4)) {
-        val h = s.t / 2
-        if (s.horizontal) wrect(t, s.x0 - h, s.y0 - h, s.x1 - s.x0 + s.t, s.t, WallColor)
-        else wrect(t, s.x0 - h, s.y0 - h, s.t, s.y1 - s.y0 + s.t, WallColor)
+    // Wände (Achsen mit Dicke)
+    for (s in wallSegs(p, f)) {
+        drawLine(WallColor, Offset(t.x(s.x0), t.y(s.y0)), Offset(t.x(s.x1), t.y(s.y1)), t.s(s.t), cap = StrokeCap.Square)
     }
     // Auswahl Raum
     val selRoom = f.rooms.firstOrNull { it.id == selectedId }
     if (selRoom != null) {
-        drawRect(
-            SelectColor, Offset(t.x(selRoom.x0), t.y(selRoom.y0)),
-            Size(t.s(selRoom.x1 - selRoom.x0), t.s(selRoom.y1 - selRoom.y0)),
+        drawPath(
+            pathOf(t, selRoom.pts), SelectColor,
             style = Stroke(line * 2f, pathEffect = PathEffect.dashPathEffect(floatArrayOf(font, font * 0.6f)))
         )
-    }
-    if (selectedId == "OUTER") {
-        drawRect(
-            SelectColor, Offset(t.x(0.0) - font * 0.3f, t.y(0.0) - font * 0.3f),
-            Size(t.s(p.w) + font * 0.6f, t.s(p.d) + font * 0.6f),
-            style = Stroke(line * 1.8f, pathEffect = PathEffect.dashPathEffect(floatArrayOf(font, font * 0.6f)))
-        )
-        for (c in listOf(Offset(t.x(p.w - ot / 2), t.y(p.d / 2)), Offset(t.x(p.w / 2), t.y(p.d - ot / 2)))) {
-            drawCircle(SelectColor, font * 0.85f, c)
-            drawCircle(WallColor, font * 0.85f, c, style = Stroke(line))
+        val m = selRoom.pts.size
+        val cen = centroid(selRoom.pts)
+        for (i in 0 until m) {
+            val a = selRoom.pts[i]
+            val b = selRoom.pts[(i + 1) % m]
+            val len = kotlin.math.hypot(b.x - a.x, b.y - a.y)
+            if (len < 0.2) continue
+            var ang = Math.toDegrees(atan2(b.y - a.y, b.x - a.x))
+            if (ang > 90 || ang <= -90) ang += 180.0
+            val mx = (a.x + b.x) / 2
+            val my = (a.y + b.y) / 2
+            // zur Rauminnenseite versetzen
+            var nx = -(b.y - a.y) / len
+            var ny = (b.x - a.x) / len
+            if ((cen.x - mx) * nx + (cen.y - my) * ny < 0) { nx = -nx; ny = -ny }
+            val px = t.x(mx) + (nx * font * 1.1).toFloat()
+            val py = t.y(my) + (ny * font * 1.1).toFloat()
+            val txt = fmtM(len)
+            nc.save()
+            nc.translate(px, py)
+            nc.rotate(ang.toFloat())
+            nc.drawText(txt, 0f, font * 0.3f, fitted(txt, font * 0.95f, t.s(len) * 0.9f, DimColor.toArgb(), true))
+            nc.restore()
+        }
+        for (q in selRoom.pts) {
+            val on = selVert != null && samePt(q, selVert)
+            drawCircle(if (on) SelectColor else Color.White, font * 0.8f, Offset(t.x(q.x), t.y(q.y)))
+            drawCircle(WallColor, font * 0.8f, Offset(t.x(q.x), t.y(q.y)), style = Stroke(line))
         }
     }
 
     // Raumbeschriftung
     for (r in f.rooms) {
-        val wp = t.s(r.x1 - r.x0)
-        val hp = t.s(r.y1 - r.y0)
-        val cx = t.x((r.x0 + r.x1) / 2)
-        val cy = t.y((r.y0 + r.y1) / 2)
-        val net = p.net(r)
+        val c = centroid(r.pts)
+        val cx = t.x(c.x)
+        val cy = t.y(c.y)
+        val bw = t.s(r.pts.maxOf { it.x } - r.pts.minOf { it.x })
+        val bh = t.s(r.pts.maxOf { it.y } - r.pts.minOf { it.y })
+        val net = roomNet(p, f, r)
         val title = if (r.name.isBlank()) "Raum" else r.name
-        if (wp > font * 3 && hp > font * 2.5f) {
-            nc.drawText(title, cx, cy - font * 0.1f, fitted(title, font * 1.1f, wp * 0.85f, InkColor.toArgb(), true))
-            val a = fmtArea(net.first * net.second)
-            nc.drawText(a, cx, cy + font * 1.2f, fitted(a, font, wp * 0.85f, 0xFF555555.toInt(), false))
+        if (bw > font * 3 && bh > font * 2.5f) {
+            nc.drawText(title, cx, cy - font * 0.1f, fitted(title, font * 1.1f, bw * 0.8f, InkColor.toArgb(), true))
+            val a = fmtArea(net.area)
+            nc.drawText(a, cx, cy + font * 1.2f, fitted(a, font, bw * 0.8f, 0xFF555555.toInt(), false))
+            if (roomDims && net.w != null && net.d != null && r.id != selectedId) {
+                val dt = fmtM(net.w) + " × " + fmtM(net.d)
+                nc.drawText(dt, cx, cy + font * 2.4f, fitted(dt, font * 0.9f, bw * 0.8f, DimColor.toArgb(), true))
+            }
         }
-        if ((roomDims || r.id == selectedId) && wp > font * 4 && hp > font * 4) {
-            val dp = fitted(fmtM(net.first), font * 0.95f, wp * 0.5f, DimColor.toArgb(), true)
-            nc.drawText(fmtM(net.first), cx, t.y(r.y0) + (if (eq(r.y0, p.iy0)) 0f else t.s(p.innerT / 2)) + font * 1.3f, dp)
-            nc.save()
-            nc.translate(t.x(r.x0) + (if (eq(r.x0, p.ix0)) 0f else t.s(p.innerT / 2)) + font * 1.0f, cy)
-            nc.rotate(-90f)
-            nc.drawText(fmtM(net.second), 0f, 0f, fitted(fmtM(net.second), font * 0.95f, hp * 0.5f, DimColor.toArgb(), true))
-            nc.restore()
+    }
+    if (pending.isNotEmpty()) {
+        for (i in 0 until pending.size - 1) {
+            drawLine(SelectColor, Offset(t.x(pending[i].x), t.y(pending[i].y)), Offset(t.x(pending[i + 1].x), t.y(pending[i + 1].y)), line * 2f)
+        }
+        for (q in pending) {
+            drawCircle(SelectColor, font * 0.7f, Offset(t.x(q.x), t.y(q.y)))
+            drawCircle(WallColor, font * 0.7f, Offset(t.x(q.x), t.y(q.y)), style = Stroke(line))
         }
     }
 
@@ -501,11 +517,13 @@ fun DrawScope.drawView(p: Plan, side: Int, font: Float) {
     for (i in 0 until n) {
         for (e in p.floors[i].els) {
             if (e.kind != Kind.DOOR && e.kind != Kind.WINDOW) continue
+            val rx = e.x - p.bx
+            val ry = e.y - p.by
             val u: Double? = when (side) {
-                0 -> if (abs(e.y - (p.d - tw / 2)) < tw) e.x else null
-                1 -> if (abs(e.x - (p.w - tw / 2)) < tw) p.d - e.y else null
-                2 -> if (abs(e.y - tw / 2) < tw) p.w - e.x else null
-                else -> if (abs(e.x - tw / 2) < tw) e.y else null
+                0 -> if (abs(ry - (p.d - tw / 2)) < tw) rx else null
+                1 -> if (abs(rx - (p.w - tw / 2)) < tw) p.d - ry else null
+                2 -> if (abs(ry - tw / 2) < tw) p.w - rx else null
+                else -> if (abs(rx - tw / 2) < tw) ry else null
             }
             if (u == null) continue
             val hh = if (e.vh > 0) e.vh else if (e.kind == Kind.DOOR) 2.01 else 1.2

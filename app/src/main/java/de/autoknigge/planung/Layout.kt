@@ -1,48 +1,144 @@
 package de.autoknigge.planung
 
 import kotlin.math.abs
+import kotlin.math.atan2
+import kotlin.math.hypot
 import kotlin.math.max
 import kotlin.math.min
 import kotlin.math.roundToInt
 import kotlin.math.sqrt
 
 const val EPS = 0.003
-const val MIN_ROOM = 0.8
+const val MIN_AREA = 0.4
 
 fun eq(a: Double, b: Double): Boolean = abs(a - b) < EPS
+fun samePt(a: Pt, b: Pt): Boolean = eq(a.x, b.x) && eq(a.y, b.y)
 
-/** Wandachse mit Dicke. */
-data class Seg(val x0: Double, val y0: Double, val x1: Double, val y1: Double, val t: Double) {
-    val horizontal: Boolean get() = abs(y1 - y0) < EPS
-}
+// ------------------------------------------------------------------ Geometrie
 
-fun wallSegs(p: Plan, f: Floor): List<Seg> {
-    val t = p.outerT
-    val l = mutableListOf(
-        Seg(t / 2, t / 2, p.w - t / 2, t / 2, t),
-        Seg(t / 2, p.d - t / 2, p.w - t / 2, p.d - t / 2, t),
-        Seg(t / 2, t / 2, t / 2, p.d - t / 2, t),
-        Seg(p.w - t / 2, t / 2, p.w - t / 2, p.d - t / 2, t)
-    )
-    for (r in f.rooms) {
-        if (!eq(r.x0, p.ix0)) l.add(Seg(r.x0, r.y0, r.x0, r.y1, p.innerT))
-        if (!eq(r.x1, p.ix1)) l.add(Seg(r.x1, r.y0, r.x1, r.y1, p.innerT))
-        if (!eq(r.y0, p.iy0)) l.add(Seg(r.x0, r.y0, r.x1, r.y0, p.innerT))
-        if (!eq(r.y1, p.iy1)) l.add(Seg(r.x0, r.y1, r.x1, r.y1, p.innerT))
+fun signedArea(pts: List<Pt>): Double {
+    var s = 0.0
+    for (i in pts.indices) {
+        val a = pts[i]
+        val b = pts[(i + 1) % pts.size]
+        s += a.x * b.y - b.x * a.y
     }
-    return l
+    return s / 2
 }
 
-/** Wandflächen (x- und y-Lagen), an denen Möbel einrasten. */
+fun polyArea(pts: List<Pt>): Double = abs(signedArea(pts))
+
+fun pointIn(pts: List<Pt>, x: Double, y: Double): Boolean {
+    var inside = false
+    var j = pts.size - 1
+    for (i in pts.indices) {
+        val a = pts[i]
+        val b = pts[j]
+        if ((a.y > y) != (b.y > y) && x < (b.x - a.x) * (y - a.y) / (b.y - a.y) + a.x) inside = !inside
+        j = i
+    }
+    return inside
+}
+
+/** Abstand eines Punktes von einer Strecke und die Lage (0..1) des nächsten Punktes darauf. */
+fun segProj(px: Double, py: Double, ax: Double, ay: Double, bx: Double, by: Double): Pair<Double, Double> {
+    val dx = bx - ax
+    val dy = by - ay
+    val l2 = dx * dx + dy * dy
+    val t = if (l2 < 1e-12) 0.0 else clampD(((px - ax) * dx + (py - ay) * dy) / l2, 0.0, 1.0)
+    return Pair(hypot(px - (ax + dx * t), py - (ay + dy * t)), t)
+}
+
+fun centroid(pts: List<Pt>): Pt {
+    val a = signedArea(pts)
+    if (abs(a) < 1e-9) return Pt(pts.sumOf { it.x } / pts.size, pts.sumOf { it.y } / pts.size)
+    var cx = 0.0
+    var cy = 0.0
+    for (i in pts.indices) {
+        val p = pts[i]
+        val q = pts[(i + 1) % pts.size]
+        val f = p.x * q.y - q.x * p.y
+        cx += (p.x + q.x) * f
+        cy += (p.y + q.y) * f
+    }
+    val c = Pt(cx / (6 * a), cy / (6 * a))
+    if (pointIn(pts, c.x, c.y)) return c
+    val x0 = pts.minOf { it.x }
+    val x1 = pts.maxOf { it.x }
+    val y0 = pts.minOf { it.y }
+    val y1 = pts.maxOf { it.y }
+    val m = Pt((x0 + x1) / 2, (y0 + y1) / 2)
+    return if (pointIn(pts, m.x, m.y)) m else pts[0]
+}
+
+/** Ecken, die mitten auf der Kante eines anderen Raums liegen, dort als Ecke einfügen. So teilen sich Räume ganze Wände. */
+fun normalize(rooms: List<Room>): List<Room> {
+    val all = rooms.flatMap { it.pts }
+    return rooms.map { r ->
+        val out = mutableListOf<Pt>()
+        val n = r.pts.size
+        for (i in 0 until n) {
+            val a = r.pts[i]
+            val b = r.pts[(i + 1) % n]
+            out.add(a)
+            val ins = mutableListOf<Pair<Double, Pt>>()
+            for (v in all) {
+                if (samePt(v, a) || samePt(v, b)) continue
+                val (dd, t) = segProj(v.x, v.y, a.x, a.y, b.x, b.y)
+                if (dd < EPS && t > 1e-6 && t < 1 - 1e-6) ins.add(Pair(t, v))
+            }
+            for (q in ins.sortedBy { it.first }) if (!samePt(out.last(), q.second)) out.add(q.second)
+        }
+        val clean = out.filterIndexed { i, q -> !samePt(q, out[(i + 1) % out.size]) }
+        r.copy(pts = if (clean.size >= 3) clean else r.pts)
+    }
+}
+
+private fun key(p: Pt) = Pair(Math.round(p.x * 500), Math.round(p.y * 500))
+
+private fun ekey(a: Pt, b: Pt): Pair<Pair<Long, Long>, Pair<Long, Long>> {
+    val ka = key(a)
+    val kb = key(b)
+    return if (ka.first < kb.first || (ka.first == kb.first && ka.second <= kb.second)) Pair(ka, kb) else Pair(kb, ka)
+}
+
+/** Alle verschiedenen Wände: Anfang, Ende und wie viele Räume sie nutzen. */
+fun uniqueEdges(rooms: List<Room>): List<Triple<Pt, Pt, Int>> {
+    val map = LinkedHashMap<Pair<Pair<Long, Long>, Pair<Long, Long>>, Triple<Pt, Pt, Int>>()
+    for (r in rooms) {
+        val n = r.pts.size
+        for (i in 0 until n) {
+            val a = r.pts[i]
+            val b = r.pts[(i + 1) % n]
+            if (samePt(a, b)) continue
+            val k = ekey(a, b)
+            val ex = map[k]
+            map[k] = if (ex == null) Triple(a, b, 1) else Triple(ex.first, ex.second, ex.third + 1)
+        }
+    }
+    return map.values.toList()
+}
+
+/** Wandachse mit Dicke. Die Richtung zeigt immer nach rechts oder (bei senkrechten Wänden) nach unten. */
+data class Seg(val x0: Double, val y0: Double, val x1: Double, val y1: Double, val t: Double) {
+    val len: Double get() = hypot(x1 - x0, y1 - y0)
+    val angle: Double get() = Math.toDegrees(atan2(y1 - y0, x1 - x0))
+}
+
+fun wallSegs(p: Plan, f: Floor): List<Seg> =
+    uniqueEdges(f.rooms).map { (a, b, c) ->
+        val flip = b.x < a.x - EPS || (abs(b.x - a.x) < EPS && b.y < a.y)
+        val s = if (flip) Pair(b, a) else Pair(a, b)
+        Seg(s.first.x, s.first.y, s.second.x, s.second.y, if (c >= 2) p.innerT else p.outerT)
+    }
+
+/** Wandflächen (x- und y-Lagen) senkrechter und waagerechter Wände, an denen Möbel einrasten. */
 fun wallFaces(p: Plan, f: Floor): Pair<List<Double>, List<Double>> {
-    val xs = mutableListOf(p.ix0, p.ix1)
-    val ys = mutableListOf(p.iy0, p.iy1)
-    val h = p.innerT / 2
-    for (r in f.rooms) {
-        if (!eq(r.x0, p.ix0)) { xs.add(r.x0 - h); xs.add(r.x0 + h) }
-        if (!eq(r.x1, p.ix1)) { xs.add(r.x1 - h); xs.add(r.x1 + h) }
-        if (!eq(r.y0, p.iy0)) { ys.add(r.y0 - h); ys.add(r.y0 + h) }
-        if (!eq(r.y1, p.iy1)) { ys.add(r.y1 - h); ys.add(r.y1 + h) }
+    val xs = mutableListOf<Double>()
+    val ys = mutableListOf<Double>()
+    for (s in wallSegs(p, f)) {
+        if (abs(s.x1 - s.x0) < EPS) { xs.add(s.x0 - s.t / 2); xs.add(s.x0 + s.t / 2) }
+        if (abs(s.y1 - s.y0) < EPS) { ys.add(s.y0 - s.t / 2); ys.add(s.y0 + s.t / 2) }
     }
     return Pair(xs, ys)
 }
@@ -51,25 +147,20 @@ fun wallFaces(p: Plan, f: Floor): Pair<List<Double>, List<Double>> {
 fun attachToWall(e: El, p: Plan, f: Floor, tol: Double): El {
     var best: Seg? = null
     var bd = tol
+    var bt = 0.0
     for (s in wallSegs(p, f)) {
-        val px = clampD(e.x, min(s.x0, s.x1), max(s.x0, s.x1))
-        val py = clampD(e.y, min(s.y0, s.y1), max(s.y0, s.y1))
-        val d = sqrt((e.x - px) * (e.x - px) + (e.y - py) * (e.y - py))
-        if (d < bd) { bd = d; best = s }
+        val (d, t) = segProj(e.x, e.y, s.x0, s.y0, s.x1, s.y1)
+        if (d < bd) { bd = d; best = s; bt = t }
     }
     val s = best ?: return e
+    val len = s.len
     val half = e.w / 2
-    return if (s.horizontal) {
-        val lo = s.x0 + s.t / 2 + half
-        val hi = s.x1 - s.t / 2 - half
-        val cx = if (lo > hi) (s.x0 + s.x1) / 2 else clampD(e.x, lo, hi)
-        e.copy(x = cx, y = s.y0, rot = 0.0, h = s.t + 0.02)
-    } else {
-        val lo = s.y0 + s.t / 2 + half
-        val hi = s.y1 - s.t / 2 - half
-        val cy = if (lo > hi) (s.y0 + s.y1) / 2 else clampD(e.y, lo, hi)
-        e.copy(x = s.x0, y = cy, rot = 90.0, h = s.t + 0.02)
-    }
+    val lo = s.t / 2 + half
+    val hi = len - s.t / 2 - half
+    val along = if (lo > hi) len / 2 else clampD(bt * len, lo, hi)
+    val ux = (s.x1 - s.x0) / len
+    val uy = (s.y1 - s.y0) / len
+    return e.copy(x = s.x0 + ux * along, y = s.y0 + uy * along, rot = s.angle, h = s.t + 0.02)
 }
 
 fun reattachAll(p: Plan, tol: Double): Plan = p.copy(
@@ -78,326 +169,340 @@ fun reattachAll(p: Plan, tol: Double): Plan = p.copy(
     }
 )
 
-/** Treffer auf eine innere Trennwand: senkrecht oder waagerecht, Lage und Ausdehnung. */
-data class EdgeHit(val vertical: Boolean, val pos: Double, val lo: Double, val hi: Double)
+// ------------------------------------------------------------------ Flächen
 
-fun findEdge(p: Plan, f: Floor, wx: Double, wy: Double, tol: Double): EdgeHit? {
-    var best: EdgeHit? = null
+data class NetInfo(val area: Double, val w: Double?, val d: Double?)
+
+/** Lichte Fläche eines Raums (halbe Wanddicke abgezogen). Bei Rechtecken auch lichte Breite und Tiefe. */
+fun roomNet(p: Plan, f: Floor, r: Room): NetInfo {
+    val counts = HashMap<Pair<Pair<Long, Long>, Pair<Long, Long>>, Int>()
+    for (o in f.rooms) {
+        val n = o.pts.size
+        for (i in 0 until n) {
+            val k = ekey(o.pts[i], o.pts[(i + 1) % n])
+            counts[k] = (counts[k] ?: 0) + 1
+        }
+    }
+    val n = r.pts.size
+    fun th(a: Pt, b: Pt): Double = if ((counts[ekey(a, b)] ?: 1) >= 2) p.innerT else p.outerT
+    val x0 = r.pts.minOf { it.x }
+    val x1 = r.pts.maxOf { it.x }
+    val y0 = r.pts.minOf { it.y }
+    val y1 = r.pts.maxOf { it.y }
+    var axis = true
+    for (i in 0 until n) {
+        val a = r.pts[i]
+        val b = r.pts[(i + 1) % n]
+        if (abs(a.x - b.x) > EPS && abs(a.y - b.y) > EPS) axis = false
+    }
+    val gross = polyArea(r.pts)
+    if (axis && abs(gross - (x1 - x0) * (y1 - y0)) < 0.01) {
+        var tl = 0.0
+        var tr = 0.0
+        var tt = 0.0
+        var tb = 0.0
+        for (i in 0 until n) {
+            val a = r.pts[i]
+            val b = r.pts[(i + 1) % n]
+            val t = th(a, b)
+            if (eq(a.x, b.x)) { if (eq(a.x, x0)) tl = max(tl, t) else tr = max(tr, t) }
+            else { if (eq(a.y, y0)) tt = max(tt, t) else tb = max(tb, t) }
+        }
+        val w = max(0.0, x1 - x0 - tl / 2 - tr / 2)
+        val d = max(0.0, y1 - y0 - tt / 2 - tb / 2)
+        return NetInfo(w * d, w, d)
+    }
+    var s = 0.0
+    for (i in 0 until n) {
+        val a = r.pts[i]
+        val b = r.pts[(i + 1) % n]
+        s += hypot(b.x - a.x, b.y - a.y) * th(a, b) / 2
+    }
+    return NetInfo(max(0.0, gross - s), null, null)
+}
+
+// ------------------------------------------------------------------ Trefferprüfung
+
+/** Nächste Wand (Anfang, Ende) zu einem Punkt. */
+fun findEdge(rooms: List<Room>, wx: Double, wy: Double, tol: Double): Pair<Pt, Pt>? {
+    var best: Pair<Pt, Pt>? = null
     var bd = tol
-    for (r in f.rooms) {
-        for (x in listOf(r.x0, r.x1)) {
-            if (eq(x, p.ix0) || eq(x, p.ix1)) continue
-            if (wy >= r.y0 - tol / 2 && wy <= r.y1 + tol / 2) {
-                val d = abs(wx - x)
-                if (d < bd) { bd = d; best = EdgeHit(true, x, r.y0, r.y1) }
-            }
-        }
-        for (y in listOf(r.y0, r.y1)) {
-            if (eq(y, p.iy0) || eq(y, p.iy1)) continue
-            if (wx >= r.x0 - tol / 2 && wx <= r.x1 + tol / 2) {
-                val d = abs(wy - y)
-                if (d < bd) { bd = d; best = EdgeHit(false, y, r.x0, r.x1) }
-            }
-        }
+    for ((a, b, _) in uniqueEdges(rooms)) {
+        val (d, _) = segProj(wx, wy, a.x, a.y, b.x, b.y)
+        if (d < bd) { bd = d; best = Pair(a, b) }
     }
     return best
 }
 
-/** Gesamte zusammenhängende Wandlinie, zu der der getroffene Abschnitt gehört. */
-fun chainOf(rooms: List<Room>, e: EdgeHit): Pair<Double, Double> {
-    val spans = mutableListOf<Pair<Double, Double>>()
-    for (r in rooms) {
-        if (e.vertical) {
-            if (eq(r.x0, e.pos) || eq(r.x1, e.pos)) spans.add(Pair(r.y0, r.y1))
-        } else {
-            if (eq(r.y0, e.pos) || eq(r.y1, e.pos)) spans.add(Pair(r.x0, r.x1))
-        }
+fun findVertex(r: Room, wx: Double, wy: Double, tol: Double): Pt? {
+    var best: Pt? = null
+    var bd = tol
+    for (q in r.pts) {
+        val d = hypot(wx - q.x, wy - q.y)
+        if (d < bd) { bd = d; best = q }
     }
-    var a = e.lo
-    var b = e.hi
+    return best
+}
+
+/** Index der Kante eines Raums (von Ecke i zu i+1), die dem Punkt am nächsten liegt. */
+fun nearestEdgeIndex(r: Room, wx: Double, wy: Double, tol: Double): Int? {
+    var best: Int? = null
+    var bd = tol
+    for (i in r.pts.indices) {
+        val a = r.pts[i]
+        val b = r.pts[(i + 1) % r.pts.size]
+        val (d, _) = segProj(wx, wy, a.x, a.y, b.x, b.y)
+        if (d < bd) { bd = d; best = i }
+    }
+    return best
+}
+
+// ------------------------------------------------------------------ Verschieben
+
+/** Alle Wände, die mit der angegebenen in gerader Linie durchlaufen. */
+fun chainEdges(rooms: List<Room>, a: Pt, b: Pt): List<Pair<Pt, Pt>> {
+    val edges = uniqueEdges(rooms).map { Pair(it.first, it.second) }
+    val dx = b.x - a.x
+    val dy = b.y - a.y
+    val len = hypot(dx, dy)
+    val res = mutableListOf(Pair(a, b))
     var changed = true
     while (changed) {
         changed = false
-        for (s in spans) {
-            if (s.first < b - EPS && s.second > a + EPS) {
-                if (s.first < a - EPS) { a = s.first; changed = true }
-                if (s.second > b + EPS) { b = s.second; changed = true }
-            }
+        for (e in edges) {
+            if (res.any { samePt(it.first, e.first) && samePt(it.second, e.second) || samePt(it.first, e.second) && samePt(it.second, e.first) }) continue
+            val touches = res.any { samePt(it.first, e.first) || samePt(it.first, e.second) || samePt(it.second, e.first) || samePt(it.second, e.second) }
+            if (!touches) continue
+            val ex = e.second.x - e.first.x
+            val ey = e.second.y - e.first.y
+            val el = hypot(ex, ey)
+            if (el < 1e-9) continue
+            if (abs(dx * ey - dy * ex) / (len * el) < 0.003) { res.add(e); changed = true }
         }
     }
-    return Pair(a, b)
+    return res
 }
 
-data class LineMove(val rooms: List<Room>, val pos: Double)
-
-/** Verschiebt die Wandlinie; Räume auf der einen Seite wachsen, auf der anderen schrumpfen sie. */
-fun moveLine(rooms: List<Room>, e: EdgeHit, chain: Pair<Double, Double>, newPos: Double): LineMove {
-    val a = chain.first
-    val b = chain.second
-    var lowLimit = -Double.MAX_VALUE
-    var highLimit = Double.MAX_VALUE
-    for (r in rooms) {
-        val s0 = if (e.vertical) r.y0 else r.x0
-        val s1 = if (e.vertical) r.y1 else r.x1
-        if (!(s0 < b - EPS && s1 > a + EPS)) continue
-        val lo = if (e.vertical) r.x0 else r.y0
-        val hi = if (e.vertical) r.x1 else r.y1
-        if (eq(hi, e.pos)) lowLimit = max(lowLimit, lo + MIN_ROOM)
-        if (eq(lo, e.pos)) highLimit = min(highLimit, hi - MIN_ROOM)
+fun chainPoints(chain: List<Pair<Pt, Pt>>): List<Pt> {
+    val out = mutableListOf<Pt>()
+    for ((a, b) in chain) {
+        if (out.none { samePt(it, a) }) out.add(a)
+        if (out.none { samePt(it, b) }) out.add(b)
     }
-    val np = if (lowLimit > highLimit) e.pos else clampD(newPos, lowLimit, highLimit)
-    val out = rooms.map { r ->
-        val s0 = if (e.vertical) r.y0 else r.x0
-        val s1 = if (e.vertical) r.y1 else r.x1
-        if (!(s0 < b - EPS && s1 > a + EPS)) r
-        else if (e.vertical) {
-            var n = r
-            if (eq(r.x1, e.pos)) n = n.copy(x1 = np)
-            if (eq(r.x0, e.pos)) n = n.copy(x0 = np)
-            n
-        } else {
-            var n = r
-            if (eq(r.y1, e.pos)) n = n.copy(y1 = np)
-            if (eq(r.y0, e.pos)) n = n.copy(y0 = np)
-            n
+    return out
+}
+
+/** Verschiebt die genannten Eckpunkte in allen Räumen (oder nur in [only]). */
+fun movePoints(rooms: List<Room>, pts: List<Pt>, dx: Double, dy: Double, only: String?): List<Room> =
+    normalize(rooms.map { r ->
+        if (only != null && r.id != only) r
+        else r.copy(pts = r.pts.map { q -> if (pts.any { samePt(it, q) }) Pt(q.x + dx, q.y + dy) else q })
+    })
+
+/** Türen und Fenster, die an den verschobenen Wänden sitzen, mitnehmen. */
+fun shiftOpenings(els: List<El>, chain: List<Pair<Pt, Pt>>, dx: Double, dy: Double): List<El> =
+    els.map { e ->
+        if (e.kind != Kind.DOOR && e.kind != Kind.WINDOW) e
+        else if (chain.any { segProj(e.x, e.y, it.first.x, it.first.y, it.second.x, it.second.y).first < 0.5 }) e.copy(x = e.x + dx, y = e.y + dy)
+        else e
+    }
+
+// ------------------------------------------------------------------ Räume ändern
+
+private fun clip(pts: List<Pt>, f: (Pt) -> Double): List<Pt> {
+    val out = mutableListOf<Pt>()
+    for (i in pts.indices) {
+        val a = pts[i]
+        val b = pts[(i + 1) % pts.size]
+        val fa = f(a)
+        val fb = f(b)
+        if (fa >= 0) out.add(a)
+        if ((fa >= 0) != (fb >= 0)) {
+            val t = fa / (fa - fb)
+            out.add(Pt(a.x + (b.x - a.x) * t, a.y + (b.y - a.y) * t))
         }
     }
-    return LineMove(out, np)
+    return out
 }
-
-/** Türen und Fenster auf der verschobenen Wandlinie mitnehmen. */
-fun shiftOpenings(els: List<El>, e: EdgeHit, chain: Pair<Double, Double>, delta: Double): List<El> =
-    els.map {
-        if (it.kind != Kind.DOOR && it.kind != Kind.WINDOW) it
-        else if (e.vertical && abs(it.x - e.pos) < 0.5 && it.y >= chain.first - 0.1 && it.y <= chain.second + 0.1) it.copy(x = it.x + delta)
-        else if (!e.vertical && abs(it.y - e.pos) < 0.5 && it.x >= chain.first - 0.1 && it.x <= chain.second + 0.1) it.copy(y = it.y + delta)
-        else it
-    }
-
-private val NEW_NAMES = "Raum"
 
 /** Raum teilen. [vertical]: true = senkrechte Trennwand (links/rechts), false = waagerecht, null = entlang der längeren Seite. */
 fun splitRoom(f: Floor, id: String, vertical: Boolean?): Floor? {
     val r = f.rooms.firstOrNull { it.id == id } ?: return null
-    val v = vertical ?: ((r.x1 - r.x0) >= (r.y1 - r.y0))
-    val len = if (v) r.x1 - r.x0 else r.y1 - r.y0
-    if (len < 2 * MIN_ROOM + 0.1) return null
-    val pos = snapTo((if (v) r.x0 else r.y0) + len / 2, 0.05)
-    val a = if (v) r.copy(x1 = pos) else r.copy(y1 = pos)
-    val b = (if (v) r.copy(x0 = pos) else r.copy(y0 = pos)).copy(
-        id = java.util.UUID.randomUUID().toString(),
-        name = NEW_NAMES + " " + (f.rooms.size + 1),
-        color = f.rooms.size % ROOM_COLORS.size
-    )
-    return f.copy(rooms = f.rooms.flatMap { if (it.id == id) listOf(a, b) else listOf(it) })
+    val x0 = r.pts.minOf { it.x }
+    val x1 = r.pts.maxOf { it.x }
+    val y0 = r.pts.minOf { it.y }
+    val y1 = r.pts.maxOf { it.y }
+    val v = vertical ?: ((x1 - x0) >= (y1 - y0))
+    val c = snapTo(if (v) (x0 + x1) / 2 else (y0 + y1) / 2, 0.05)
+    val a = clip(r.pts) { if (v) c - it.x else c - it.y }
+    val b = clip(r.pts) { if (v) it.x - c else it.y - c }
+    if (a.size < 3 || b.size < 3 || polyArea(a) < MIN_AREA || polyArea(b) < MIN_AREA) return null
+    val rb = Room(name = "Raum " + (f.rooms.size + 1), pts = b, color = f.rooms.size % ROOM_COLORS.size)
+    val rooms = f.rooms.flatMap { if (it.id == id) listOf(it.copy(pts = a), rb) else listOf(it) }
+    return f.copy(rooms = normalize(rooms))
 }
 
-/** Raum entfernen: ein Nachbar mit gleicher Kante übernimmt die Fläche. */
-fun mergeRoom(f: Floor, id: String): Floor? {
-    val r = f.rooms.firstOrNull { it.id == id } ?: return null
-    if (f.rooms.size < 2) return null
-    for (o in f.rooms) {
-        if (o.id == id) continue
-        val sameY = eq(o.y0, r.y0) && eq(o.y1, r.y1)
-        val sameX = eq(o.x0, r.x0) && eq(o.x1, r.x1)
-        val grown: Room? = when {
-            sameY && eq(o.x1, r.x0) -> o.copy(x1 = r.x1)
-            sameY && eq(o.x0, r.x1) -> o.copy(x0 = r.x0)
-            sameX && eq(o.y1, r.y0) -> o.copy(y1 = r.y1)
-            sameX && eq(o.y0, r.y1) -> o.copy(y0 = r.y0)
-            else -> null
-        }
-        if (grown != null) {
-            return f.copy(rooms = f.rooms.filter { it.id != id }.map { if (it.id == o.id) grown else it })
+private fun ccw(pts: List<Pt>): List<Pt> = if (signedArea(pts) < 0) pts.reversed() else pts
+
+/** Zwei Räume mit gemeinsamer Wand zu einem Raum vereinen (Name und Farbe von [a] bleiben). */
+fun mergeRooms(f: Floor, a: String, b: String): Floor? {
+    val ra = f.rooms.firstOrNull { it.id == a } ?: return null
+    val rb = f.rooms.firstOrNull { it.id == b } ?: return null
+    val ea = mutableListOf<Pair<Pt, Pt>>()
+    val eb = mutableListOf<Pair<Pt, Pt>>()
+    val pa = ccw(ra.pts)
+    val pb = ccw(rb.pts)
+    for (i in pa.indices) ea.add(Pair(pa[i], pa[(i + 1) % pa.size]))
+    for (i in pb.indices) eb.add(Pair(pb[i], pb[(i + 1) % pb.size]))
+    val keepA = ea.filter { x -> eb.none { y -> samePt(x.first, y.second) && samePt(x.second, y.first) } }
+    val keepB = eb.filter { y -> ea.none { x -> samePt(x.first, y.second) && samePt(x.second, y.first) } }
+    if (keepA.size == ea.size) return null
+    val rest = (keepA + keepB).toMutableList()
+    if (rest.size < 3) return null
+    val loop = mutableListOf<Pt>()
+    var cur = rest.removeAt(0)
+    loop.add(cur.first)
+    while (true) {
+        val idx = rest.indexOfFirst { samePt(it.first, cur.second) }
+        if (idx < 0) break
+        cur = rest.removeAt(idx)
+        loop.add(cur.first)
+    }
+    if (rest.isNotEmpty() || !samePt(cur.second, loop[0])) return null
+    val merged = ra.copy(pts = loop)
+    val rooms = f.rooms.filter { it.id != b }.map { if (it.id == a) merged else it }
+    return f.copy(rooms = normalize(rooms))
+}
+
+fun deleteRoom(f: Floor, id: String): Floor? = if (f.rooms.size < 2) null else f.copy(rooms = f.rooms.filter { it.id != id })
+
+/** Neue Ecke auf der Kante [edge] des Raums einfügen. */
+fun insertVertex(f: Floor, id: String, edge: Int, at: Pt): Floor {
+    val rooms = f.rooms.map { r ->
+        if (r.id != id) r
+        else r.copy(pts = r.pts.take(edge + 1) + at + r.pts.drop(edge + 1))
+    }
+    return f.copy(rooms = normalize(rooms))
+}
+
+/** Ecke in allen Räumen entfernen. Null, wenn dabei ein Raum weniger als 3 Ecken hätte. */
+fun deleteVertex(f: Floor, v: Pt): Floor? {
+    val rooms = f.rooms.map { r ->
+        if (r.pts.none { samePt(it, v) }) r
+        else {
+            if (r.pts.size <= 3) return null
+            r.copy(pts = r.pts.filter { !samePt(it, v) })
         }
     }
-    return null
+    return f.copy(rooms = normalize(rooms))
 }
 
-/** Lichte Breite oder Tiefe eines Raums auf einen Wert setzen; der Nachbar gibt nach. */
-fun setRoomNet(p: Plan, f: Floor, id: String, netW: Double?, netD: Double?): Floor {
+/**
+ * Ecke [v] eines Raums abtrennen: ein Bereich mit den Kantenlängen [a] (die eher waagerechte Kante)
+ * und [b] entsteht, der Rest bleibt ein Raum mit Einbuchtung.
+ */
+fun carveCorner(f: Floor, id: String, v: Pt, a: Double, b: Double): Floor? {
+    val r = f.rooms.firstOrNull { it.id == id } ?: return null
+    val n = r.pts.size
+    val i = r.pts.indexOfFirst { samePt(it, v) }
+    if (i < 0) return null
+    val prev = r.pts[(i + n - 1) % n]
+    val next = r.pts[(i + 1) % n]
+    val l1 = hypot(prev.x - v.x, prev.y - v.y)
+    val l2 = hypot(next.x - v.x, next.y - v.y)
+    if (l1 < 1e-6 || l2 < 1e-6) return null
+    val u1 = Pt((prev.x - v.x) / l1, (prev.y - v.y) / l1)
+    val u2 = Pt((next.x - v.x) / l2, (next.y - v.y) / l2)
+    val firstHoriz = abs(u1.x) >= abs(u2.x)
+    val a1 = if (firstHoriz) a else b
+    val a2 = if (firstHoriz) b else a
+    if (a1 > l1 - 0.1 || a2 > l2 - 0.1 || a1 < 0.3 || a2 < 0.3) return null
+    val p1 = Pt(v.x + u1.x * a1, v.y + u1.y * a1)
+    val p3 = Pt(v.x + u2.x * a2, v.y + u2.y * a2)
+    val q2 = Pt(v.x + u1.x * a1 + u2.x * a2, v.y + u1.y * a1 + u2.y * a2)
+    val mid = Pt((v.x + q2.x) / 2, (v.y + q2.y) / 2)
+    if (!pointIn(r.pts, mid.x, mid.y)) return null
+    val mainPts = r.pts.take(i) + listOf(p1, q2, p3) + r.pts.drop(i + 1)
+    val piece = Room(name = "Bereich", pts = listOf(v, p1, q2, p3), color = f.rooms.size % ROOM_COLORS.size)
+    val rooms = f.rooms.flatMap { if (it.id == id) listOf(it.copy(pts = mainPts), piece) else listOf(it) }
+    return f.copy(rooms = normalize(rooms))
+}
+
+/** Anbau: rechteckiger Raum außen an der Kante [edge], [depth] Meter tief. */
+fun addAnnex(f: Floor, id: String, edge: Int, depth: Double): Floor? {
+    val r = f.rooms.firstOrNull { it.id == id } ?: return null
+    val a = r.pts[edge]
+    val b = r.pts[(edge + 1) % r.pts.size]
+    val len = hypot(b.x - a.x, b.y - a.y)
+    if (len < 0.3) return null
+    var nx = -(b.y - a.y) / len
+    var ny = (b.x - a.x) / len
+    val mx = (a.x + b.x) / 2
+    val my = (a.y + b.y) / 2
+    if (f.rooms.any { pointIn(it.pts, mx + nx * 0.1, my + ny * 0.1) }) { nx = -nx; ny = -ny }
+    if (f.rooms.any { pointIn(it.pts, mx + nx * 0.1, my + ny * 0.1) }) return null
+    val pts = listOf(a, Pt(a.x + nx * depth, a.y + ny * depth), Pt(b.x + nx * depth, b.y + ny * depth), b)
+    val room = Room(name = "Anbau", pts = pts, color = f.rooms.size % ROOM_COLORS.size)
+    return f.copy(rooms = normalize(f.rooms + room))
+}
+
+/** Neuen Raum aus gezeichneten Eckpunkten anlegen. */
+fun addDrawn(f: Floor, pts: List<Pt>): Floor? {
+    if (pts.size < 3 || polyArea(pts) < MIN_AREA) return null
+    val room = Room(name = "Raum " + (f.rooms.size + 1), pts = pts, color = f.rooms.size % ROOM_COLORS.size)
+    return f.copy(rooms = normalize(f.rooms + room))
+}
+
+/** Lichte Breite oder Tiefe eines rechteckigen Raums setzen: die rechte bzw. untere Wand wandert. */
+fun setRectNet(p: Plan, f: Floor, id: String, netW: Double?, netD: Double?): Floor {
     var floor = f
     for (axis in 0..1) {
         val target = (if (axis == 0) netW else netD) ?: continue
         val r = floor.rooms.firstOrNull { it.id == id } ?: return floor
-        val cur = p.net(r).let { if (axis == 0) it.first else it.second }
+        val info = roomNet(p, floor, r)
+        val cur = (if (axis == 0) info.w else info.d) ?: return floor
         val delta = target - cur
         if (abs(delta) < 0.001) continue
-        val vertical = axis == 0
-        val lo = if (vertical) r.x0 else r.y0
-        val hi = if (vertical) r.x1 else r.y1
-        val limLo = if (vertical) p.ix0 else p.iy0
-        val limHi = if (vertical) p.ix1 else p.iy1
-        val hit: EdgeHit
-        val newPos: Double
-        if (!eq(hi, limHi)) {
-            hit = EdgeHit(vertical, hi, if (vertical) r.y0 else r.x0, if (vertical) r.y1 else r.x1)
-            newPos = hi + delta
-        } else if (!eq(lo, limLo)) {
-            hit = EdgeHit(vertical, lo, if (vertical) r.y0 else r.x0, if (vertical) r.y1 else r.x1)
-            newPos = lo - delta
-        } else continue
-        val chain = chainOf(floor.rooms, hit)
-        val mv = moveLine(floor.rooms, hit, chain, newPos)
-        floor = floor.copy(rooms = mv.rooms, els = shiftOpenings(floor.els, hit, chain, mv.pos - hit.pos))
+        val hi = if (axis == 0) r.pts.maxOf { it.x } else r.pts.maxOf { it.y }
+        val onEdge = r.pts.filter { if (axis == 0) eq(it.x, hi) else eq(it.y, hi) }
+        if (onEdge.size < 2) continue
+        val a = onEdge.minByOrNull { if (axis == 0) it.y else it.x } ?: continue
+        val b = onEdge.maxByOrNull { if (axis == 0) it.y else it.x } ?: continue
+        val chain = chainEdges(floor.rooms, a, b)
+        val dx = if (axis == 0) delta else 0.0
+        val dy = if (axis == 1) delta else 0.0
+        floor = floor.copy(
+            rooms = movePoints(floor.rooms, chainPoints(chain), dx, dy, null),
+            els = shiftOpenings(floor.els, chain, dx, dy)
+        )
     }
     return floor
 }
 
-private fun pieceMap(v: Double, oldT: Double, oldLen: Double, newT: Double, newLen: Double): Double {
-    val k = newT / oldT
-    return when {
-        v <= oldT -> v * k
-        v >= oldLen - oldT -> newLen - newT + (v - (oldLen - oldT)) * k
-        else -> newT + (v - oldT) * ((newLen - 2 * newT) / (oldLen - 2 * oldT))
-    }
-}
-
-/** Außenmaße und Wandstärken ändern. Räume und Elemente werden mit umgerechnet. */
+/** Gesamtgröße des Hauses ändern: alles wird gleichmäßig gestreckt. Außenmaße inkl. Wände. */
 fun resizeHouse(p: Plan, w: Double, d: Double, outerT: Double, innerT: Double): Plan {
+    val ow = p.w
+    val od = p.d
+    val bx = p.bx
+    val by = p.by
     val nw = max(w, 2 * outerT + 1.5)
     val nd = max(d, 2 * outerT + 1.5)
-    fun mx(v: Double) = pieceMap(v, p.outerT, p.w, outerT, nw)
-    fun my(v: Double) = pieceMap(v, p.outerT, p.d, outerT, nd)
+    val sx = if (ow - p.outerT > 0.1) (nw - outerT) / (ow - p.outerT) else 1.0
+    val sy = if (od - p.outerT > 0.1) (nd - outerT) / (od - p.outerT) else 1.0
+    val ax = bx + p.outerT / 2
+    val ay = by + p.outerT / 2
+    val nax = bx + outerT / 2
+    val nay = by + outerT / 2
+    fun mx(v: Double) = nax + (v - ax) * sx
+    fun my(v: Double) = nay + (v - ay) * sy
     val floors = p.floors.map { f ->
         f.copy(
-            rooms = f.rooms.map { r -> r.copy(x0 = mx(r.x0), x1 = mx(r.x1), y0 = my(r.y0), y1 = my(r.y1)) },
+            rooms = f.rooms.map { r -> r.copy(pts = r.pts.map { Pt(mx(it.x), my(it.y)) }) },
             els = f.els.map { e -> e.copy(x = mx(e.x), y = my(e.y)) }
         )
     }
-    val np = p.copy(w = nw, d = nd, outerT = outerT, innerT = innerT, floors = floors)
-    return reattachAll(np, 0.8)
+    return reattachAll(p.copy(outerT = outerT, innerT = innerT, floors = floors), 0.8)
 }
 
 /** Anzahl Treppenstufen für ein Geschoss. */
 fun stairSteps(f: Floor): Int = max(3, ((f.height + SLAB) / 0.18).roundToInt())
-
-/** Zwei Räume mit gemeinsamer Kante gleicher Länge zu einem verbinden. Name und Farbe von [a] bleiben. */
-fun mergeTwo(f: Floor, a: String, b: String): Floor? {
-    val r = f.rooms.firstOrNull { it.id == a } ?: return null
-    val o = f.rooms.firstOrNull { it.id == b } ?: return null
-    val sameY = eq(o.y0, r.y0) && eq(o.y1, r.y1)
-    val sameX = eq(o.x0, r.x0) && eq(o.x1, r.x1)
-    val m: Room = when {
-        sameY && (eq(o.x1, r.x0) || eq(o.x0, r.x1)) -> r.copy(x0 = min(r.x0, o.x0), x1 = max(r.x1, o.x1))
-        sameX && (eq(o.y1, r.y0) || eq(o.y0, r.y1)) -> r.copy(y0 = min(r.y0, o.y0), y1 = max(r.y1, o.y1))
-        else -> return null
-    }
-    return f.copy(rooms = f.rooms.filter { it.id != b }.map { if (it.id == a) m else it })
-}
-
-/**
- * Eine Ecke des Raums als eigenen Bereich abtrennen (lichte Maße [netW] × [netD]).
- * Der Rest besteht aus zwei Rechtecken. Null, wenn der Rest zu klein würde.
- */
-fun carveCorner(p: Plan, f: Floor, id: String, netW: Double, netD: Double, left: Boolean, top: Boolean): Floor? {
-    val r = f.rooms.firstOrNull { it.id == id } ?: return null
-    val h = p.innerT / 2
-    val sideX = if (left) (if (eq(r.x0, p.ix0)) 0.0 else h) else (if (eq(r.x1, p.ix1)) 0.0 else h)
-    val sideY = if (top) (if (eq(r.y0, p.iy0)) 0.0 else h) else (if (eq(r.y1, p.iy1)) 0.0 else h)
-    val cw = snapTo(netW + sideX + h, 0.05)
-    val ch = snapTo(netD + sideY + h, 0.05)
-    val w = r.x1 - r.x0
-    val d = r.y1 - r.y0
-    if (cw < MIN_ROOM || ch < MIN_ROOM || cw > w - MIN_ROOM || ch > d - MIN_ROOM) return null
-    val cx0 = if (left) r.x0 else r.x1 - cw
-    val cx1 = cx0 + cw
-    val cy0 = if (top) r.y0 else r.y1 - ch
-    val cy1 = cy0 + ch
-    val piece = Room(name = "Bereich", color = f.rooms.size % ROOM_COLORS.size, x0 = cx0, y0 = cy0, x1 = cx1, y1 = cy1)
-    val main = if (left) r.copy(x0 = cx1) else r.copy(x1 = cx0)
-    val under = Room(
-        name = "Raum " + (f.rooms.size + 2), color = r.color,
-        x0 = cx0, x1 = cx1,
-        y0 = if (top) cy1 else r.y0, y1 = if (top) r.y1 else cy0
-    )
-    return f.copy(rooms = f.rooms.flatMap { if (it.id == id) listOf(main, piece, under) else listOf(it) })
-}
-
-/** Einzelne Kante eines Raums: senkrecht/waagerecht und ob es die hintere (rechte/untere) Kante ist. */
-data class OwnEdge(val vertical: Boolean, val high: Boolean, val pos: Double)
-
-/** Trifft der Punkt eine Kante genau dieses Raums (auch die zur Außenwand)? */
-fun findOwnEdge(p: Plan, r: Room, wx: Double, wy: Double, tol: Double): OwnEdge? {
-    var best: OwnEdge? = null
-    var bd = tol
-    if (wy >= r.y0 - tol / 2 && wy <= r.y1 + tol / 2) {
-        run { val d = abs(wx - r.x0); if (d < bd) { bd = d; best = OwnEdge(true, false, r.x0) } }
-        run { val d = abs(wx - r.x1); if (d < bd) { bd = d; best = OwnEdge(true, true, r.x1) } }
-    }
-    if (wx >= r.x0 - tol / 2 && wx <= r.x1 + tol / 2) {
-        run { val d = abs(wy - r.y0); if (d < bd) { bd = d; best = OwnEdge(false, false, r.y0) } }
-        run { val d = abs(wy - r.y1); if (d < bd) { bd = d; best = OwnEdge(false, true, r.y1) } }
-    }
-    return best
-}
-
-/** Verschiebt nur die Kante eines Raums. Der Nachbar bleibt; es darf eine Lücke entstehen, aber keine Überlappung. */
-fun moveSingle(p: Plan, rooms: List<Room>, id: String, e: OwnEdge, newPos: Double): List<Room> {
-    val r = rooms.firstOrNull { it.id == id } ?: return rooms
-    val lo = if (e.vertical) r.x0 else r.y0
-    val hi = if (e.vertical) r.x1 else r.y1
-    var minV = if (e.high) lo + MIN_ROOM else (if (e.vertical) p.ix0 else p.iy0)
-    var maxV = if (e.high) (if (e.vertical) p.ix1 else p.iy1) else hi - MIN_ROOM
-    val s0 = if (e.vertical) r.y0 else r.x0
-    val s1 = if (e.vertical) r.y1 else r.x1
-    for (o in rooms) {
-        if (o.id == id) continue
-        val o0 = if (e.vertical) o.y0 else o.x0
-        val o1 = if (e.vertical) o.y1 else o.x1
-        if (!(o0 < s1 - EPS && o1 > s0 + EPS)) continue
-        val olo = if (e.vertical) o.x0 else o.y0
-        val ohi = if (e.vertical) o.x1 else o.y1
-        if (e.high && olo >= e.pos - EPS) maxV = min(maxV, olo)
-        if (!e.high && ohi <= e.pos + EPS) minV = max(minV, ohi)
-    }
-    val np = if (minV > maxV) e.pos else clampD(newPos, minV, maxV)
-    return rooms.map {
-        if (it.id != id) it
-        else if (e.vertical) (if (e.high) it.copy(x1 = np) else it.copy(x0 = np))
-        else (if (e.high) it.copy(y1 = np) else it.copy(y0 = np))
-    }
-}
-
-/** Freies Rechteck (Lücke zwischen den Räumen) an einem Punkt, oder null wenn dort ein Raum liegt. */
-fun freeRectAt(p: Plan, f: Floor, wx: Double, wy: Double): Room? {
-    val xs = distinct2(listOf(p.ix0, p.ix1) + f.rooms.flatMap { listOf(it.x0, it.x1) })
-    val ys = distinct2(listOf(p.iy0, p.iy1) + f.rooms.flatMap { listOf(it.y0, it.y1) })
-    fun free(i: Int, j: Int): Boolean {
-        if (i < 0 || j < 0 || i >= xs.size - 1 || j >= ys.size - 1) return false
-        val cx = (xs[i] + xs[i + 1]) / 2
-        val cy = (ys[j] + ys[j + 1]) / 2
-        return f.rooms.none { cx > it.x0 && cx < it.x1 && cy > it.y0 && cy < it.y1 }
-    }
-    var ci = -1
-    var cj = -1
-    for (i in 0 until xs.size - 1) if (wx >= xs[i] && wx <= xs[i + 1]) ci = i
-    for (j in 0 until ys.size - 1) if (wy >= ys[j] && wy <= ys[j + 1]) cj = j
-    if (!free(ci, cj)) return null
-    var i0 = ci
-    var i1 = ci
-    while (free(i0 - 1, cj)) i0--
-    while (free(i1 + 1, cj)) i1++
-    var j0 = cj
-    var j1 = cj
-    while ((i0..i1).all { free(it, j0 - 1) }) j0--
-    while ((i0..i1).all { free(it, j1 + 1) }) j1++
-    return Room(name = "Raum", x0 = xs[i0], x1 = xs[i1 + 1], y0 = ys[j0], y1 = ys[j1 + 1])
-}
-
-private fun distinct2(v: List<Double>): List<Double> {
-    val out = mutableListOf<Double>()
-    for (x in v.sorted()) if (out.isEmpty() || x - out.last() > 0.002) out.add(x)
-    return out
-}
-
-/** Räume, die genau an der Lücke anliegen (gleiche Kantenlänge) und sich dorthin ausdehnen können. */
-fun gapNeighbours(f: Floor, g: Room): List<Room> = f.rooms.filter { r ->
-    val sameY = eq(r.y0, g.y0) && eq(r.y1, g.y1)
-    val sameX = eq(r.x0, g.x0) && eq(r.x1, g.x1)
-    (sameY && (eq(r.x1, g.x0) || eq(r.x0, g.x1))) || (sameX && (eq(r.y1, g.y0) || eq(r.y0, g.y1)))
-}
-
-fun growInto(r: Room, g: Room): Room = r.copy(
-    x0 = min(r.x0, g.x0), x1 = max(r.x1, g.x1), y0 = min(r.y0, g.y0), y1 = max(r.y1, g.y1)
-)
