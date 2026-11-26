@@ -271,3 +271,45 @@ fun resizeHouse(p: Plan, w: Double, d: Double, outerT: Double, innerT: Double): 
 
 /** Anzahl Treppenstufen für ein Geschoss. */
 fun stairSteps(f: Floor): Int = max(3, ((f.height + SLAB) / 0.18).roundToInt())
+
+/** Zwei Räume mit gemeinsamer Kante gleicher Länge zu einem verbinden. Name und Farbe von [a] bleiben. */
+fun mergeTwo(f: Floor, a: String, b: String): Floor? {
+    val r = f.rooms.firstOrNull { it.id == a } ?: return null
+    val o = f.rooms.firstOrNull { it.id == b } ?: return null
+    val sameY = eq(o.y0, r.y0) && eq(o.y1, r.y1)
+    val sameX = eq(o.x0, r.x0) && eq(o.x1, r.x1)
+    val m: Room = when {
+        sameY && (eq(o.x1, r.x0) || eq(o.x0, r.x1)) -> r.copy(x0 = min(r.x0, o.x0), x1 = max(r.x1, o.x1))
+        sameX && (eq(o.y1, r.y0) || eq(o.y0, r.y1)) -> r.copy(y0 = min(r.y0, o.y0), y1 = max(r.y1, o.y1))
+        else -> return null
+    }
+    return f.copy(rooms = f.rooms.filter { it.id != b }.map { if (it.id == a) m else it })
+}
+
+/**
+ * Eine Ecke des Raums als eigenen Bereich abtrennen (lichte Maße [netW] × [netD]).
+ * Der Rest besteht aus zwei Rechtecken. Null, wenn der Rest zu klein würde.
+ */
+fun carveCorner(p: Plan, f: Floor, id: String, netW: Double, netD: Double, left: Boolean, top: Boolean): Floor? {
+    val r = f.rooms.firstOrNull { it.id == id } ?: return null
+    val h = p.innerT / 2
+    val sideX = if (left) (if (eq(r.x0, p.ix0)) 0.0 else h) else (if (eq(r.x1, p.ix1)) 0.0 else h)
+    val sideY = if (top) (if (eq(r.y0, p.iy0)) 0.0 else h) else (if (eq(r.y1, p.iy1)) 0.0 else h)
+    val cw = snapTo(netW + sideX + h, 0.05)
+    val ch = snapTo(netD + sideY + h, 0.05)
+    val w = r.x1 - r.x0
+    val d = r.y1 - r.y0
+    if (cw < MIN_ROOM || ch < MIN_ROOM || cw > w - MIN_ROOM || ch > d - MIN_ROOM) return null
+    val cx0 = if (left) r.x0 else r.x1 - cw
+    val cx1 = cx0 + cw
+    val cy0 = if (top) r.y0 else r.y1 - ch
+    val cy1 = cy0 + ch
+    val piece = Room(name = "Bereich", color = f.rooms.size % ROOM_COLORS.size, x0 = cx0, y0 = cy0, x1 = cx1, y1 = cy1)
+    val main = if (left) r.copy(x0 = cx1) else r.copy(x1 = cx0)
+    val under = Room(
+        name = "Raum " + (f.rooms.size + 2), color = r.color,
+        x0 = cx0, x1 = cx1,
+        y0 = if (top) cy1 else r.y0, y1 = if (top) r.y1 else cy0
+    )
+    return f.copy(rooms = f.rooms.flatMap { if (it.id == id) listOf(main, piece, under) else listOf(it) })
+}

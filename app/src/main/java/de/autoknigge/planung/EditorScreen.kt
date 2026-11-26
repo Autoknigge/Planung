@@ -98,6 +98,8 @@ fun EditorScreen(plan: Plan, onSave: (Plan) -> Unit, onBack: () -> Unit) {
     var floorDlg by remember { mutableStateOf(false) }
     var addFloorDlg by remember { mutableStateOf(false) }
     var showView by remember { mutableStateOf(false) }
+    var mergeSrc by remember { mutableStateOf<String?>(null) }
+    var cornerDlg by remember { mutableStateOf(false) }
     val undo = remember { mutableStateListOf<Plan>() }
 
     val latest = rememberUpdatedState(p)
@@ -194,6 +196,19 @@ fun EditorScreen(plan: Plan, onSave: (Plan) -> Unit, onBack: () -> Unit) {
     }
 
     fun tapSelect(pt: Offset) {
+        val src = mergeSrc
+        if (src != null) {
+            val wx = ((pt.x - origin.x) / scale).toDouble()
+            val wy = ((pt.y - origin.y) / scale).toDouble()
+            val other = fl().rooms.firstOrNull { wx >= it.x0 && wx <= it.x1 && wy >= it.y0 && wy <= it.y1 }
+            mergeSrc = null
+            if (other != null && other.id != src) {
+                val nf = mergeTwo(fl(), src, other.id)
+                if (nf == null) Toast.makeText(ctx, "Die Räume haben keine gemeinsame Kante gleicher Länge. Erst Trennwände verschieben.", Toast.LENGTH_LONG).show()
+                else { pushUndo(); putFloor(fiIdx(), nf); selId = src }
+            }
+            return
+        }
         val hit = hitEl(pt)
         if (hit != null) {
             selId = hit.id
@@ -461,6 +476,14 @@ fun EditorScreen(plan: Plan, onSave: (Plan) -> Unit, onBack: () -> Unit) {
                         if (nf == null) Toast.makeText(ctx, "Der Raum ist zu niedrig.", Toast.LENGTH_SHORT).show()
                         else { pushUndo(); putFloor(fiIdx(), nf) }
                     }
+                    BarButton(if (mergeSrc != null) "Nachbarraum antippen …" else "Zusammenlegen") {
+                        if (mergeSrc != null) mergeSrc = null
+                        else {
+                            mergeSrc = selRoom.id
+                            Toast.makeText(ctx, "Jetzt den Raum antippen, der dazukommen soll.", Toast.LENGTH_SHORT).show()
+                        }
+                    }
+                    BarButton("Ecke abtrennen") { cornerDlg = true }
                     BarButton("Raum entfernen") {
                         val nf = mergeRoom(flv, selRoom.id)
                         if (nf == null) Toast.makeText(ctx, "Geht nur, wenn ein Nachbar die gleiche Kante hat. Erst Trennwände so verschieben.", Toast.LENGTH_LONG).show()
@@ -741,6 +764,40 @@ fun EditorScreen(plan: Plan, onSave: (Plan) -> Unit, onBack: () -> Unit) {
                 }) { Text("OK") }
             },
             dismissButton = { TextButton(onClick = { roofDlg = false }) { Text("Abbrechen") } }
+        )
+    }
+
+    if (cornerDlg && selRoom != null) {
+        val n0 = p.net(selRoom)
+        var cw by remember { mutableStateOf("1,50") }
+        var cd by remember { mutableStateOf("1,50") }
+        var corner by remember { mutableStateOf(0) }
+        val kb = KeyboardOptions(keyboardType = KeyboardType.Decimal)
+        AlertDialog(
+            onDismissRequest = { cornerDlg = false },
+            title = { Text("Ecke abtrennen") },
+            text = {
+                Column(Modifier.verticalScroll(rememberScrollState())) {
+                    Text("Lichte Größe des neuen Bereichs. Der Rest des Raums wird in zwei Rechtecke aufgeteilt.", color = Muted, fontSize = 12.sp)
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        OutlinedTextField(value = cw, onValueChange = { cw = it }, label = { Text("Breite (m)") }, singleLine = true, keyboardOptions = kb, modifier = Modifier.weight(1f))
+                        OutlinedTextField(value = cd, onValueChange = { cd = it }, label = { Text("Tiefe (m)") }, singleLine = true, keyboardOptions = kb, modifier = Modifier.weight(1f))
+                    }
+                    Spacer(Modifier.size(8.dp))
+                    Text("Ecke", color = Muted, fontSize = 12.sp)
+                    Chips(listOf("Links oben", "Rechts oben", "Links unten", "Rechts unten"), corner) { corner = it }
+                    Spacer(Modifier.size(4.dp))
+                    Text("Raum aktuell " + fmtM(n0.first) + " × " + fmtM(n0.second) + " m", color = Muted, fontSize = 12.sp)
+                }
+            },
+            confirmButton = {
+                TextButton(onClick = {
+                    val nf = carveCorner(p, flv, selRoom.id, num(cw) ?: 1.5, num(cd) ?: 1.5, corner % 2 == 0, corner < 2)
+                    if (nf == null) Toast.makeText(ctx, "Der Bereich ist zu groß oder zu klein für diesen Raum.", Toast.LENGTH_LONG).show()
+                    else { pushUndo(); putFloor(fiIdx(), nf); cornerDlg = false }
+                }) { Text("Abtrennen") }
+            },
+            dismissButton = { TextButton(onClick = { cornerDlg = false }) { Text("Abbrechen") } }
         )
     }
 
