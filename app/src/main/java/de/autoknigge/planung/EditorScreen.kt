@@ -1,6 +1,7 @@
 package de.autoknigge.planung
 
 import android.widget.Toast
+import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -11,16 +12,18 @@ import androidx.compose.foundation.gestures.calculateCentroid
 import androidx.compose.foundation.gestures.calculatePan
 import androidx.compose.foundation.gestures.calculateZoom
 import androidx.compose.foundation.horizontalScroll
+import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
@@ -47,6 +50,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.input.pointer.positionChange
 import androidx.compose.ui.layout.onSizeChanged
@@ -59,6 +63,8 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import kotlinx.coroutines.delay
 import java.util.Locale
+import java.util.UUID
+import kotlin.math.abs
 import kotlin.math.cos
 import kotlin.math.max
 import kotlin.math.min
@@ -66,13 +72,14 @@ import kotlin.math.sin
 
 private fun num(s: String): Double? = s.trim().replace(',', '.').toDoubleOrNull()
 private fun fmtNum(v: Double): String = String.format(Locale.GERMANY, "%.2f", v)
+private val DimHint = Color(0x66000000)
 
 @Composable
 fun EditorScreen(plan: Plan, onSave: (Plan) -> Unit, onBack: () -> Unit) {
     val ctx = LocalContext.current
     val density = LocalDensity.current.density
-    var name by remember { mutableStateOf(plan.name) }
-    var els by remember { mutableStateOf(plan.els) }
+    var p by remember { mutableStateOf(plan) }
+    var fi by remember { mutableStateOf(0) }
     var selId by remember { mutableStateOf<String?>(null) }
     var scale by remember { mutableStateOf(40f * density) }
     var origin by remember { mutableStateOf(Offset.Zero) }
@@ -80,43 +87,51 @@ fun EditorScreen(plan: Plan, onSave: (Plan) -> Unit, onBack: () -> Unit) {
     var inited by remember { mutableStateOf(false) }
     var snapOn by remember { mutableStateOf(true) }
     var dimsOn by remember { mutableStateOf(true) }
+    var outerOn by remember { mutableStateOf(true) }
     var menu by remember { mutableStateOf(false) }
     var editDlg by remember { mutableStateOf(false) }
     var furnDlg by remember { mutableStateOf(false) }
+    var stairDlg by remember { mutableStateOf(false) }
     var renameDlg by remember { mutableStateOf(false) }
-    val undo = remember { mutableStateListOf<List<El>>() }
+    var houseDlg by remember { mutableStateOf(!plan.setup) }
+    var roofDlg by remember { mutableStateOf(false) }
+    var floorDlg by remember { mutableStateOf(false) }
+    var addFloorDlg by remember { mutableStateOf(false) }
+    var showView by remember { mutableStateOf(false) }
+    val undo = remember { mutableStateListOf<Plan>() }
 
-    val latest = rememberUpdatedState(Plan(plan.id, name, els, System.currentTimeMillis()))
-    LaunchedEffect(els, name) {
-        if (els !== plan.els || name != plan.name) {
+    val latest = rememberUpdatedState(p)
+    LaunchedEffect(p) {
+        if (p !== plan) {
             delay(500)
-            onSave(latest.value)
+            onSave(latest.value.copy(updated = System.currentTimeMillis()))
         }
     }
     DisposableEffect(Unit) {
-        onDispose { if (latest.value.els !== plan.els || latest.value.name != plan.name) onSave(latest.value) }
+        onDispose { if (latest.value !== plan) onSave(latest.value.copy(updated = System.currentTimeMillis())) }
     }
 
+    fun fiIdx(): Int = fi.coerceIn(0, p.floors.lastIndex)
+    fun fl(): Floor = p.floors[fiIdx()]
+    fun putFloor(gi: Int, f: Floor) {
+        p = p.copy(floors = p.floors.mapIndexed { i, x -> if (i == gi) f else x })
+    }
     fun pushUndo() {
-        undo.add(els)
+        undo.add(p)
         if (undo.size > 60) undo.removeAt(0)
     }
 
     fun fit() {
-        val b = boundsOf(els)
+        val x0 = -2.2
+        val y0 = -2.2
+        val x1 = p.w + 0.6
+        val y1 = p.d + 0.6
         val vw = viewSize.width.toFloat()
         val vh = viewSize.height.toFloat()
-        if (b == null) {
-            scale = 40f * density
-            origin = Offset(vw / 2, vh / 2)
-        } else {
-            val bw = (b[2] - b[0]).toFloat() + 2f
-            val bh = (b[3] - b[1]).toFloat() + 2f
-            scale = min(vw / bw, vh / bh).coerceIn(8f, 400f * density / 3f)
-            val cx = ((b[0] + b[2]) / 2).toFloat()
-            val cy = ((b[1] + b[3]) / 2).toFloat()
-            origin = Offset(vw / 2 - cx * scale, vh / 2 - cy * scale)
-        }
+        scale = min(vw / (x1 - x0).toFloat(), vh / (y1 - y0).toFloat()).coerceIn(8f, 400f * density / 3f)
+        val cx = ((x0 + x1) / 2).toFloat()
+        val cy = ((y0 + y1) / 2).toFloat()
+        origin = Offset(vw / 2 - cx * scale, vh / 2 - cy * scale)
     }
     LaunchedEffect(viewSize) {
         if (!inited && viewSize.width > 0) {
@@ -125,35 +140,79 @@ fun EditorScreen(plan: Plan, onSave: (Plan) -> Unit, onBack: () -> Unit) {
         }
     }
 
-    fun add(kind: Kind, label: String, w: Double, h: Double) {
+    fun centerX(): Double = clampD(snapTo(((viewSize.width / 2f - origin.x) / scale).toDouble(), 0.05), p.ix0 + 0.3, p.ix1 - 0.3)
+    fun centerY(): Double = clampD(snapTo(((viewSize.height / 2f - origin.y) / scale).toDouble(), 0.05), p.iy0 + 0.3, p.iy1 - 0.3)
+
+    fun addEl(kind: Kind, label: String, w: Double, h: Double, vh: Double = 0.0, sill: Double = 0.0, sub: Int = 0) {
         pushUndo()
-        val cx = snapTo(((viewSize.width / 2f - origin.x) / scale).toDouble(), 0.05)
-        val cy = snapTo(((viewSize.height / 2f - origin.y) / scale).toDouble(), 0.05)
-        val colorIdx = els.count { it.kind == Kind.ROOM } % ROOM_COLORS.size
-        val e = El(kind = kind, name = label, x = cx, y = cy, w = w, h = h, color = colorIdx)
-        els = els + e
+        var e = El(kind = kind, name = label, x = centerX(), y = centerY(), w = w, h = h, vh = vh, sill = sill, sub = sub)
+        if (kind == Kind.DOOR || kind == Kind.WINDOW) e = attachToWall(e, p, fl(), 3.0)
+        putFloor(fiIdx(), fl().copy(els = fl().els + e))
         selId = e.id
     }
 
-    fun hitAt(p: Offset): El? {
-        val wx = ((p.x - origin.x) / scale).toDouble()
-        val wy = ((p.y - origin.y) / scale).toDouble()
-        val margin = (8f * density / scale).toDouble()
-        return els.reversed().sortedByDescending { rank(it.kind) }.firstOrNull { hits(it, wx, wy, margin) }
+    fun addRoom() {
+        val f = fl()
+        val target = f.rooms.firstOrNull { it.id == selId } ?: f.rooms.maxByOrNull { (it.x1 - it.x0) * (it.y1 - it.y0) }
+        if (target == null) return
+        val nf = splitRoom(f, target.id, null)
+        if (nf == null) {
+            Toast.makeText(ctx, "Der Raum ist zu klein zum Teilen.", Toast.LENGTH_SHORT).show()
+            return
+        }
+        pushUndo()
+        val oldIds = f.rooms.map { it.id }.toSet()
+        putFloor(fiIdx(), nf)
+        selId = nf.rooms.firstOrNull { it.id !in oldIds }?.id
     }
 
-    fun handleHit(e: El, p: Offset): Boolean {
+    fun hitEl(pt: Offset): El? {
+        val wx = ((pt.x - origin.x) / scale).toDouble()
+        val wy = ((pt.y - origin.y) / scale).toDouble()
+        val margin = (8f * density / scale).toDouble()
+        return fl().els.sortedByDescending { rank(it.kind) }.firstOrNull { hits(it, wx, wy, margin) }
+    }
+
+    fun handleHit(e: El, pt: Offset): Boolean {
         val (vx, vy) = toWorldVec(e, e.w / 2, e.h / 2)
         val sx = origin.x + ((e.x + vx) * scale).toFloat()
         val sy = origin.y + ((e.y + vy) * scale).toFloat()
-        val dx = p.x - sx
-        val dy = p.y - sy
+        val dx = pt.x - sx
+        val dy = pt.y - sy
         val r = 30f * density
         return dx * dx + dy * dy <= r * r
     }
 
-    val sel = els.firstOrNull { it.id == selId }
+    fun outerHandle(pt: Offset): Int {
+        if (selId != "OUTER") return -1
+        val r = 30f * density
+        val a = Offset(origin.x + ((p.w - p.outerT / 2) * scale).toFloat(), origin.y + ((p.d / 2) * scale).toFloat())
+        val b = Offset(origin.x + ((p.w / 2) * scale).toFloat(), origin.y + ((p.d - p.outerT / 2) * scale).toFloat())
+        if ((pt - a).getDistance() <= r) return 0
+        if ((pt - b).getDistance() <= r) return 1
+        return -1
+    }
 
+    fun tapSelect(pt: Offset) {
+        val hit = hitEl(pt)
+        if (hit != null) {
+            selId = hit.id
+            return
+        }
+        val wx = ((pt.x - origin.x) / scale).toDouble()
+        val wy = ((pt.y - origin.y) / scale).toDouble()
+        val inHouse = wx >= 0 && wx <= p.w && wy >= 0 && wy <= p.d
+        val inInner = wx >= p.ix0 && wx <= p.ix1 && wy >= p.iy0 && wy <= p.iy1
+        selId = if (inHouse && !inInner) "OUTER"
+        else fl().rooms.firstOrNull { wx >= it.x0 && wx <= it.x1 && wy >= it.y0 && wy <= it.y1 }?.id
+    }
+
+    val flv = fl()
+    val selEl = flv.els.firstOrNull { it.id == selId }
+    val selRoom = flv.rooms.firstOrNull { it.id == selId }
+    val outerSel = selId == "OUTER"
+
+    Box(Modifier.fillMaxSize()) {
     Column(Modifier.fillMaxSize()) {
         Row(
             Modifier.fillMaxWidth().background(Panel).padding(horizontal = 4.dp, vertical = 2.dp),
@@ -161,13 +220,16 @@ fun EditorScreen(plan: Plan, onSave: (Plan) -> Unit, onBack: () -> Unit) {
         ) {
             IconButton(onClick = onBack) { Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Zurück", tint = Ink) }
             Column(Modifier.weight(1f).clickable { renameDlg = true }) {
-                Text(name, color = Ink, fontWeight = FontWeight.Bold, fontSize = 17.sp, maxLines = 1)
-                Text("Räume gesamt: " + fmtArea(els.filter { it.kind == Kind.ROOM }.sumOf { it.w * it.h }), color = Muted, fontSize = 12.sp)
+                Text(p.name, color = Ink, fontWeight = FontWeight.Bold, fontSize = 17.sp, maxLines = 1)
+                Text(
+                    flv.name + " · Raumhöhe " + fmtM(flv.height) + " m · " + fmtArea(p.areaOf(flv)),
+                    color = Muted, fontSize = 12.sp, maxLines = 1
+                )
             }
             TextButton(
                 onClick = {
                     if (undo.isNotEmpty()) {
-                        els = undo.removeAt(undo.lastIndex)
+                        p = undo.removeAt(undo.lastIndex)
                         selId = null
                     }
                 },
@@ -177,19 +239,40 @@ fun EditorScreen(plan: Plan, onSave: (Plan) -> Unit, onBack: () -> Unit) {
                 IconButton(onClick = { menu = true }) { Icon(Icons.Filled.MoreVert, contentDescription = "Menü", tint = Ink) }
                 DropdownMenu(expanded = menu, onDismissRequest = { menu = false }) {
                     DropdownMenuItem(text = { Text("Einrasten (Raster, Kanten): " + if (snapOn) "an" else "aus") }, onClick = { snapOn = !snapOn; menu = false })
-                    DropdownMenuItem(text = { Text("Maße bei Räumen: " + if (dimsOn) "an" else "aus") }, onClick = { dimsOn = !dimsOn; menu = false })
+                    DropdownMenuItem(text = { Text("Maße in den Räumen: " + if (dimsOn) "an" else "aus") }, onClick = { dimsOn = !dimsOn; menu = false })
+                    DropdownMenuItem(text = { Text("Außenmaße: " + if (outerOn) "an" else "aus") }, onClick = { outerOn = !outerOn; menu = false })
                     DropdownMenuItem(text = { Text("Ganzen Plan anzeigen") }, onClick = { fit(); menu = false })
                     DropdownMenuItem(text = { Text("Plan umbenennen") }, onClick = { renameDlg = true; menu = false })
-                    DropdownMenuItem(text = { Text("Als Bild teilen (PNG)") }, onClick = {
+                    DropdownMenuItem(text = { Text("Dieses Geschoss als Bild teilen (PNG)") }, onClick = {
                         menu = false
-                        if (!Export.sharePng(ctx, latest.value)) Toast.makeText(ctx, "Der Plan ist noch leer.", Toast.LENGTH_SHORT).show()
+                        Export.sharePng(ctx, latest.value, fiIdx())
                     })
-                    DropdownMenuItem(text = { Text("Als PDF teilen") }, onClick = {
+                    DropdownMenuItem(text = { Text("Alles als PDF teilen") }, onClick = {
                         menu = false
-                        if (!Export.sharePdf(ctx, latest.value)) Toast.makeText(ctx, "Der Plan ist noch leer.", Toast.LENGTH_SHORT).show()
+                        Export.sharePdf(ctx, latest.value)
                     })
                 }
             }
+        }
+
+        Row(
+            Modifier.fillMaxWidth().background(Panel2).horizontalScroll(rememberScrollState()).padding(horizontal = 8.dp, vertical = 4.dp),
+            horizontalArrangement = Arrangement.spacedBy(6.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            p.floors.forEachIndexed { i, f ->
+                val on = i == fiIdx()
+                Box(
+                    Modifier.background(if (on) Gold else Panel, RoundedCornerShape(8.dp))
+                        .clickable {
+                            if (on) floorDlg = true else { fi = i; selId = null }
+                        }
+                        .padding(horizontal = 12.dp, vertical = 6.dp)
+                ) {
+                    Text(f.name + if (on) " ✎" else "", color = if (on) Color(0xFF1A1400) else Ink, fontSize = 13.sp, fontWeight = if (on) FontWeight.Bold else FontWeight.Normal, maxLines = 1)
+                }
+            }
+            BarButton("+ Geschoss") { addFloorDlg = true }
         }
 
         Box(Modifier.weight(1f).fillMaxWidth()) {
@@ -203,19 +286,40 @@ fun EditorScreen(plan: Plan, onSave: (Plan) -> Unit, onBack: () -> Unit) {
                         awaitEachGesture {
                             val down = awaitFirstDown(requireUnconsumed = false)
                             val start = down.position
-                            var mode = 0 // 0 Ansicht verschieben, 1 Element bewegen, 2 Größe ändern
+                            val wx0 = ((start.x - origin.x) / scale).toDouble()
+                            val wy0 = ((start.y - origin.y) / scale).toDouble()
+                            val gi = fiIdx()
+                            val snapPlan = p
+                            val snapFloor = snapPlan.floors[gi]
+                            // 0 Ansicht verschieben, 1 Element bewegen, 2 Elementgröße, 3 Trennwand, 4 Außenwand
+                            var mode = 0
                             var targetId: String? = null
+                            var raw = 0.0
                             var rawX = 0.0
                             var rawY = 0.0
                             var rawW = 0.0
                             var rawH = 0.0
-                            val cur = els.firstOrNull { it.id == selId }
-                            if (cur != null && handleHit(cur, start)) {
+                            var axis = 0
+                            var edge: EdgeHit? = null
+                            var chain = Pair(0.0, 0.0)
+                            val cur = snapFloor.els.firstOrNull { it.id == selId }
+                            val oh = outerHandle(start)
+                            if (oh >= 0) {
+                                mode = 4
+                                axis = oh
+                                raw = if (oh == 0) snapPlan.w else snapPlan.d
+                            } else if (cur != null && handleHit(cur, start)) {
                                 mode = 2; targetId = cur.id; rawW = cur.w; rawH = cur.h
                             } else {
-                                val hit = hitAt(start)
+                                val hit = hitEl(start)
                                 if (hit != null) {
                                     mode = 1; targetId = hit.id; selId = hit.id; rawX = hit.x; rawY = hit.y
+                                } else {
+                                    val tol = (14f * density / scale).toDouble()
+                                    val eh = findEdge(snapPlan, snapFloor, wx0, wy0, tol)
+                                    if (eh != null) {
+                                        mode = 3; edge = eh; chain = chainOf(snapFloor.rooms, eh); raw = eh.pos
+                                    }
                                 }
                             }
                             var total = Offset.Zero
@@ -243,41 +347,60 @@ fun EditorScreen(plan: Plan, onSave: (Plan) -> Unit, onBack: () -> Unit) {
                                     if (moved) {
                                         val step = if (was) d else total
                                         if (step != Offset.Zero) {
+                                            val st = if (snapOn) 0.05 else 0.01
                                             when (mode) {
                                                 0 -> origin = Offset(origin.x + step.x, origin.y + step.y)
                                                 1 -> {
                                                     if (!pushed) { pushUndo(); pushed = true }
                                                     rawX += (step.x / scale).toDouble()
                                                     rawY += (step.y / scale).toDouble()
-                                                    val t = els.firstOrNull { it.id == targetId }
+                                                    val f0 = p.floors[gi]
+                                                    val t = f0.els.firstOrNull { it.id == targetId }
                                                     if (t != null) {
-                                                        val st = if (snapOn) 0.05 else 0.01
                                                         var nx = snapTo(rawX, st)
                                                         var ny = snapTo(rawY, st)
-                                                        if (snapOn) {
-                                                            val m = magnet(t, nx, ny, els, (10f * density / scale).toDouble())
+                                                        if (snapOn && t.kind != Kind.DOOR && t.kind != Kind.WINDOW) {
+                                                            val faces = wallFaces(p, f0)
+                                                            val m = magnet(t, nx, ny, f0.els, faces.first, faces.second, (10f * density / scale).toDouble())
                                                             nx = m.first
                                                             ny = m.second
                                                         }
-                                                        els = els.map { if (it.id == t.id) it.copy(x = nx, y = ny) else it }
+                                                        putFloor(gi, f0.copy(els = f0.els.map { if (it.id == t.id) it.copy(x = nx, y = ny) else it }))
                                                     }
                                                 }
                                                 2 -> {
                                                     if (!pushed) { pushUndo(); pushed = true }
-                                                    val t = els.firstOrNull { it.id == targetId }
+                                                    val f0 = p.floors[gi]
+                                                    val t = f0.els.firstOrNull { it.id == targetId }
                                                     if (t != null) {
                                                         val r = Math.toRadians(t.rot)
                                                         val dx = (step.x / scale).toDouble()
                                                         val dy = (step.y / scale).toDouble()
                                                         rawW += cos(r) * dx + sin(r) * dy
                                                         rawH += -sin(r) * dx + cos(r) * dy
-                                                        val st = if (snapOn) 0.05 else 0.01
                                                         val nw = max(0.1, snapTo(rawW, st))
-                                                        val both = t.kind == Kind.ROOM || t.kind == Kind.FURN
+                                                        val both = t.kind == Kind.FURN || t.kind == Kind.STAIR
                                                         val nh = if (both) max(0.1, snapTo(rawH, st)) else t.h
                                                         val (vx, vy) = toWorldVec(t, (nw - t.w) / 2, (nh - t.h) / 2)
-                                                        els = els.map { if (it.id == t.id) it.copy(w = nw, h = nh, x = it.x + vx, y = it.y + vy) else it }
+                                                        putFloor(gi, f0.copy(els = f0.els.map { if (it.id == t.id) it.copy(w = nw, h = nh, x = it.x + vx, y = it.y + vy) else it }))
                                                     }
+                                                }
+                                                3 -> {
+                                                    val eh = edge
+                                                    if (eh != null) {
+                                                        if (!pushed) { pushUndo(); pushed = true }
+                                                        raw += (if (eh.vertical) step.x else step.y) / scale.toDouble()
+                                                        val mv = moveLine(snapFloor.rooms, eh, chain, snapTo(raw, st))
+                                                        val nels = shiftOpenings(snapFloor.els, eh, chain, mv.pos - eh.pos)
+                                                        p = snapPlan.copy(floors = snapPlan.floors.mapIndexed { i, x -> if (i == gi) snapFloor.copy(rooms = mv.rooms, els = nels) else x })
+                                                    }
+                                                }
+                                                4 -> {
+                                                    if (!pushed) { pushUndo(); pushed = true }
+                                                    raw += (if (axis == 0) step.x else step.y) / scale.toDouble()
+                                                    val v = snapTo(raw, 0.05).coerceIn(max(3.0, 2 * snapPlan.outerT + 1.5), 60.0)
+                                                    p = if (axis == 0) resizeHouse(snapPlan, v, snapPlan.d, snapPlan.outerT, snapPlan.innerT)
+                                                    else resizeHouse(snapPlan, snapPlan.w, v, snapPlan.outerT, snapPlan.innerT)
                                                 }
                                             }
                                         }
@@ -286,68 +409,101 @@ fun EditorScreen(plan: Plan, onSave: (Plan) -> Unit, onBack: () -> Unit) {
                                 ev.changes.forEach { if (it.positionChange() != Offset.Zero) it.consume() }
                             } while (ev.changes.any { it.pressed })
                             if (!moved) {
-                                selId = hitAt(start)?.id
+                                tapSelect(start)
                             } else if (mode == 1 && pushed) {
-                                val t = els.firstOrNull { it.id == targetId }
+                                val f0 = p.floors[gi]
+                                val t = f0.els.firstOrNull { it.id == targetId }
                                 if (t != null && (t.kind == Kind.DOOR || t.kind == Kind.WINDOW)) {
-                                    els = els.map { if (it.id == t.id) attachToWall(it, els) else it }
+                                    putFloor(gi, f0.copy(els = f0.els.map { if (it.id == t.id) attachToWall(it, p, f0, 0.8) else it }))
                                 }
                             }
                         }
                     }
             ) {
-                drawPlan(els, scale, origin, 12f * density, selId, true, dimsOn)
+                drawFloor(p, fiIdx(), scale, origin, 12f * density, selId, true, dimsOn, outerOn)
             }
-            if (els.isEmpty()) {
+            if (flv.els.isEmpty() && p.floors.size == 1 && flv.rooms.size == 1) {
                 Text(
-                    "Leerer Plan\nUnten einen Raum, eine Wand oder ein Möbelstück hinzufügen.\nMit einem Finger verschieben, mit zwei Fingern zoomen.",
-                    color = Color0x55,
-                    fontSize = 14.sp,
-                    modifier = Modifier.align(Alignment.Center).padding(24.dp)
+                    "Unten „+ Raum“ teilt den Raum, „Haus“ stellt Maße und Wände ein.\nTrennwand mit dem Finger ziehen: der Nachbarraum wird kleiner.\nMit zwei Fingern zoomen.",
+                    color = DimHint,
+                    fontSize = 13.sp,
+                    modifier = Modifier.align(Alignment.BottomCenter).padding(24.dp)
                 )
             }
         }
 
-        if (sel != null) {
+        if (selRoom != null || selEl != null || outerSel) {
             Row(
                 Modifier.fillMaxWidth().background(Panel2).horizontalScroll(rememberScrollState()).padding(horizontal = 8.dp, vertical = 4.dp),
-                horizontalArrangement = androidx.compose.foundation.layout.Arrangement.spacedBy(6.dp),
+                horizontalArrangement = Arrangement.spacedBy(6.dp),
                 verticalAlignment = Alignment.CenterVertically
             ) {
-                Text(
-                    (if (sel.name.isBlank()) sel.kind.label else sel.name) + " · " +
-                        if (sel.kind == Kind.ROOM) fmtArea(sel.w * sel.h) else fmtM(sel.w) + " × " + fmtM(sel.h) + " m",
-                    color = Ink, fontSize = 13.sp
-                )
-                BarButton("Bearbeiten") { editDlg = true }
-                BarButton("Drehen 90°") {
-                    pushUndo()
-                    els = els.map { if (it.id == sel.id) it.copy(rot = (it.rot + 90.0) % 360.0) else it }
-                }
-                BarButton("Kopieren") {
-                    pushUndo()
-                    val c = sel.copy(id = java.util.UUID.randomUUID().toString(), x = sel.x + 0.5, y = sel.y + 0.5)
-                    els = els + c
-                    selId = c.id
-                }
-                BarButton("Löschen") {
-                    pushUndo()
-                    els = els.filter { it.id != sel.id }
-                    selId = null
+                if (selRoom != null) {
+                    val n = p.net(selRoom)
+                    Text(selRoom.name.ifBlank { "Raum" } + " · " + fmtArea(n.first * n.second) + " · " + fmtM(n.first) + " × " + fmtM(n.second) + " m", color = Ink, fontSize = 13.sp)
+                    BarButton("Bearbeiten") { editDlg = true }
+                    BarButton("Teilen senkrecht") {
+                        val nf = splitRoom(flv, selRoom.id, true)
+                        if (nf == null) Toast.makeText(ctx, "Der Raum ist zu schmal.", Toast.LENGTH_SHORT).show()
+                        else { pushUndo(); putFloor(fiIdx(), nf) }
+                    }
+                    BarButton("Teilen waagerecht") {
+                        val nf = splitRoom(flv, selRoom.id, false)
+                        if (nf == null) Toast.makeText(ctx, "Der Raum ist zu niedrig.", Toast.LENGTH_SHORT).show()
+                        else { pushUndo(); putFloor(fiIdx(), nf) }
+                    }
+                    BarButton("Raum entfernen") {
+                        val nf = mergeRoom(flv, selRoom.id)
+                        if (nf == null) Toast.makeText(ctx, "Geht nur, wenn ein Nachbar die gleiche Kante hat. Erst Trennwände so verschieben.", Toast.LENGTH_LONG).show()
+                        else { pushUndo(); putFloor(fiIdx(), nf); selId = null }
+                    }
+                } else if (selEl != null) {
+                    val hasH = selEl.kind == Kind.FURN || selEl.kind == Kind.STAIR
+                    Text(
+                        (if (selEl.name.isBlank()) selEl.kind.label else selEl.name) + " · " + fmtM(selEl.w) +
+                            (if (hasH) " × " + fmtM(selEl.h) else if (selEl.vh > 0) " × " + fmtM(selEl.vh) + " hoch" else "") + " m",
+                        color = Ink, fontSize = 13.sp
+                    )
+                    BarButton("Bearbeiten") { editDlg = true }
+                    if (hasH) BarButton("Drehen 90°") {
+                        pushUndo()
+                        putFloor(fiIdx(), flv.copy(els = flv.els.map { if (it.id == selEl.id) it.copy(rot = (it.rot + 90.0) % 360.0) else it }))
+                    }
+                    BarButton("Kopieren") {
+                        pushUndo()
+                        val c = selEl.copy(id = UUID.randomUUID().toString(), x = selEl.x + 0.5, y = selEl.y + 0.5)
+                        putFloor(fiIdx(), flv.copy(els = flv.els + c))
+                        selId = c.id
+                    }
+                    BarButton("Löschen") {
+                        pushUndo()
+                        putFloor(fiIdx(), flv.copy(els = flv.els.filter { it.id != selEl.id }))
+                        selId = null
+                    }
+                } else {
+                    Text("Außenwand · " + fmtM(p.w) + " × " + fmtM(p.d) + " m · " + (p.outerT * 100).toInt() + " cm", color = Ink, fontSize = 13.sp)
+                    BarButton("Haus bearbeiten") { houseDlg = true }
                 }
             }
         }
 
         Row(
             Modifier.fillMaxWidth().background(Panel).horizontalScroll(rememberScrollState()).padding(horizontal = 8.dp, vertical = 6.dp),
-            horizontalArrangement = androidx.compose.foundation.layout.Arrangement.spacedBy(6.dp)
+            horizontalArrangement = Arrangement.spacedBy(6.dp)
         ) {
-            BarButton("+ Raum") { add(Kind.ROOM, "Raum", 4.0, 3.5) }
-            BarButton("+ Wand") { add(Kind.WALL, "", 3.0, 0.2) }
-            BarButton("+ Tür") { add(Kind.DOOR, "", 0.9, 0.22) }
-            BarButton("+ Fenster") { add(Kind.WINDOW, "", 1.2, 0.22) }
+            BarButton("+ Raum") { addRoom() }
+            BarButton("+ Tür") { addEl(Kind.DOOR, "", 0.9, 0.17, vh = 2.01) }
+            BarButton("+ Fenster") { addEl(Kind.WINDOW, "", 1.2, 0.17, vh = 1.2, sill = 0.9) }
+            BarButton("+ Treppe") { stairDlg = true }
             BarButton("+ Möbel") { furnDlg = true }
+            BarButton("Haus") { houseDlg = true }
+            BarButton("Dach") { roofDlg = true }
+            BarButton("Ansicht") { showView = true }
         }
+    }
+    if (showView) {
+        ViewScreen(p, onBack = { showView = false })
+    }
     }
 
     if (furnDlg) {
@@ -361,9 +517,9 @@ fun EditorScreen(plan: Plan, onSave: (Plan) -> Unit, onBack: () -> Unit) {
                         Row(
                             Modifier.fillMaxWidth().clickable {
                                 furnDlg = false
-                                add(Kind.FURN, if (f.name.startsWith("Frei")) "" else f.name, f.w, f.h)
+                                addEl(Kind.FURN, if (f.name.startsWith("Frei")) "" else f.name, f.w, f.h)
                             }.padding(vertical = 10.dp),
-                            horizontalArrangement = androidx.compose.foundation.layout.Arrangement.SpaceBetween
+                            horizontalArrangement = Arrangement.SpaceBetween
                         ) {
                             Text(f.name)
                             Text(fmtM(f.w) + " × " + fmtM(f.h) + " m", color = Muted)
@@ -374,100 +530,411 @@ fun EditorScreen(plan: Plan, onSave: (Plan) -> Unit, onBack: () -> Unit) {
         )
     }
 
+    if (stairDlg) {
+        val defs = listOf(Pair(1.0, 3.0), Pair(2.1, 3.0), Pair(2.2, 2.2), Pair(1.8, 1.8))
+        AlertDialog(
+            onDismissRequest = { stairDlg = false },
+            confirmButton = { TextButton(onClick = { stairDlg = false }) { Text("Schließen") } },
+            title = { Text("Treppe einfügen") },
+            text = {
+                Column {
+                    StairType.values().forEachIndexed { i, t ->
+                        Row(
+                            Modifier.fillMaxWidth().clickable {
+                                stairDlg = false
+                                addEl(Kind.STAIR, "", defs[i].first, defs[i].second, sub = i)
+                            }.padding(vertical = 12.dp),
+                            horizontalArrangement = Arrangement.SpaceBetween
+                        ) {
+                            Text(t.label)
+                            Text(fmtM(defs[i].first) + " × " + fmtM(defs[i].second) + " m", color = Muted)
+                        }
+                    }
+                }
+            }
+        )
+    }
+
+    if (addFloorDlg) {
+        AlertDialog(
+            onDismissRequest = { addFloorDlg = false },
+            confirmButton = { TextButton(onClick = { addFloorDlg = false }) { Text("Abbrechen") } },
+            title = { Text("Geschoss hinzufügen") },
+            text = {
+                Column {
+                    Text("Die Raumaufteilung des aktuellen Geschosses wird als Vorlage kopiert.", color = Muted, fontSize = 13.sp)
+                    Spacer(Modifier.size(8.dp))
+                    TextButton(onClick = {
+                        pushUndo()
+                        val top = p.floors.count { !it.cellar }
+                        val nm = if (top == 1) "Obergeschoss" else "${top - 1}. Obergeschoss"
+                        val nf = Floor(name = nm, height = 2.5, rooms = fl().rooms.map { it.copy(id = UUID.randomUUID().toString()) })
+                        p = p.copy(floors = p.floors + nf)
+                        fi = p.floors.lastIndex
+                        selId = null
+                        addFloorDlg = false
+                    }) { Text("Oben anfügen (Obergeschoss)") }
+                    TextButton(onClick = {
+                        pushUndo()
+                        val cn = p.floors.count { it.cellar }
+                        val nm = if (cn == 0) "Keller" else "${cn + 1}. Keller"
+                        val nf = Floor(name = nm, height = 2.4, cellar = true, rooms = fl().rooms.map { it.copy(id = UUID.randomUUID().toString()) })
+                        p = p.copy(floors = listOf(nf) + p.floors)
+                        fi = 0
+                        selId = null
+                        addFloorDlg = false
+                    }) { Text("Unten anfügen (Keller)") }
+                }
+            }
+        )
+    }
+
+    if (floorDlg) {
+        val f0 = fl()
+        var nm by remember(f0.id) { mutableStateOf(f0.name) }
+        var hh by remember(f0.id) { mutableStateOf(fmtNum(f0.height)) }
+        var cel by remember(f0.id) { mutableStateOf(f0.cellar) }
+        var confirmDel by remember(f0.id) { mutableStateOf(false) }
+        AlertDialog(
+            onDismissRequest = { floorDlg = false },
+            title = { Text("Geschoss") },
+            text = {
+                Column(Modifier.verticalScroll(rememberScrollState())) {
+                    OutlinedTextField(value = nm, onValueChange = { nm = it }, label = { Text("Name") }, singleLine = true)
+                    Spacer(Modifier.size(8.dp))
+                    OutlinedTextField(
+                        value = hh, onValueChange = { hh = it }, label = { Text("Raumhöhe (m)") }, singleLine = true,
+                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal)
+                    )
+                    Spacer(Modifier.size(8.dp))
+                    Chips(listOf("Wohngeschoss", "Keller (unter der Erde)"), if (cel) 1 else 0) { cel = it == 1 }
+                    if (p.floors.size > 1) {
+                        Spacer(Modifier.size(8.dp))
+                        TextButton(onClick = {
+                            if (!confirmDel) confirmDel = true
+                            else {
+                                pushUndo()
+                                val gi = fiIdx()
+                                p = p.copy(floors = p.floors.filterIndexed { i, _ -> i != gi })
+                                fi = min(gi, p.floors.lastIndex)
+                                selId = null
+                                floorDlg = false
+                            }
+                        }) { Text(if (confirmDel) "Wirklich löschen? Nochmal tippen" else "Geschoss löschen", color = Color(0xFFE57373)) }
+                    }
+                }
+            },
+            confirmButton = {
+                TextButton(onClick = {
+                    pushUndo()
+                    putFloor(fiIdx(), f0.copy(name = nm.trim().ifEmpty { f0.name }, height = (num(hh) ?: f0.height).coerceIn(1.8, 6.0), cellar = cel))
+                    floorDlg = false
+                }) { Text("OK") }
+            },
+            dismissButton = { TextButton(onClick = { floorDlg = false }) { Text("Abbrechen") } }
+        )
+    }
+
+    if (houseDlg) {
+        val f0 = fl()
+        val initial = !plan.setup && !p.setup
+        var w by remember { mutableStateOf(fmtNum(p.w)) }
+        var d by remember { mutableStateOf(fmtNum(p.d)) }
+        var hh by remember { mutableStateOf(fmtNum(f0.height)) }
+        var oi by remember { mutableStateOf(max(0, WALL_CM.indexOf((p.outerT * 100).toInt()))) }
+        var ii by remember { mutableStateOf(max(0, WALL_CM.indexOf((p.innerT * 100).toInt()))) }
+        val kb = KeyboardOptions(keyboardType = KeyboardType.Decimal)
+        val done = {
+            houseDlg = false
+            if (!p.setup) p = p.copy(setup = true)
+        }
+        AlertDialog(
+            onDismissRequest = { done() },
+            title = { Text(if (initial) "Haus festlegen" else "Haus bearbeiten") },
+            text = {
+                Column(Modifier.verticalScroll(rememberScrollState())) {
+                    Text("Außenmaße des Hauses (mit Außenwänden)", color = Muted, fontSize = 12.sp)
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        OutlinedTextField(value = w, onValueChange = { w = it }, label = { Text("Breite (m)") }, singleLine = true, keyboardOptions = kb, modifier = Modifier.weight(1f))
+                        OutlinedTextField(value = d, onValueChange = { d = it }, label = { Text("Tiefe (m)") }, singleLine = true, keyboardOptions = kb, modifier = Modifier.weight(1f))
+                    }
+                    Spacer(Modifier.size(8.dp))
+                    OutlinedTextField(value = hh, onValueChange = { hh = it }, label = { Text("Raumhöhe " + f0.name + " (m)") }, singleLine = true, keyboardOptions = kb)
+                    Spacer(Modifier.size(12.dp))
+                    Text("Außenwand (cm)", color = Muted, fontSize = 12.sp)
+                    Chips(WALL_CM.map { "$it" }, oi) { oi = it }
+                    Spacer(Modifier.size(8.dp))
+                    Text("Innenwand (cm)", color = Muted, fontSize = 12.sp)
+                    Chips(WALL_CM.map { "$it" }, ii) { ii = it }
+                }
+            },
+            confirmButton = {
+                TextButton(onClick = {
+                    pushUndo()
+                    val np = resizeHouse(
+                        p,
+                        (num(w) ?: p.w).coerceIn(3.0, 60.0),
+                        (num(d) ?: p.d).coerceIn(3.0, 60.0),
+                        WALL_CM[oi] / 100.0,
+                        WALL_CM[ii] / 100.0
+                    ).copy(setup = true)
+                    p = np
+                    val gi = fiIdx()
+                    putFloor(gi, p.floors[gi].copy(height = (num(hh) ?: f0.height).coerceIn(1.8, 6.0)))
+                    houseDlg = false
+                    fit()
+                }) { Text("OK") }
+            },
+            dismissButton = { TextButton(onClick = { done() }) { Text(if (initial) "Später" else "Abbrechen") } }
+        )
+    }
+
+    if (roofDlg) {
+        var rt by remember { mutableStateOf(p.roof.ordinal) }
+        var pitch by remember { mutableStateOf(String.format(Locale.GERMANY, "%.0f", p.pitch)) }
+        var ov by remember { mutableStateOf(fmtNum(p.overhang)) }
+        var rx by remember { mutableStateOf(p.ridgeX) }
+        val kb = KeyboardOptions(keyboardType = KeyboardType.Decimal)
+        val type = RoofType.values()[rt]
+        AlertDialog(
+            onDismissRequest = { roofDlg = false },
+            title = { Text("Dach") },
+            text = {
+                Column(Modifier.verticalScroll(rememberScrollState())) {
+                    Text("Dachform", color = Muted, fontSize = 12.sp)
+                    Chips(RoofType.values().map { it.label }, rt) { rt = it }
+                    Spacer(Modifier.size(8.dp))
+                    if (type != RoofType.FLAT) {
+                        OutlinedTextField(value = pitch, onValueChange = { pitch = it }, label = { Text("Dachneigung (Grad)") }, singleLine = true, keyboardOptions = kb)
+                        Spacer(Modifier.size(8.dp))
+                    }
+                    OutlinedTextField(value = ov, onValueChange = { ov = it }, label = { Text("Dachüberstand (m)") }, singleLine = true, keyboardOptions = kb)
+                    if (type == RoofType.GABLE || type == RoofType.SHED) {
+                        Spacer(Modifier.size(8.dp))
+                        Text(if (type == RoofType.GABLE) "Firstrichtung" else "Hohe Seite (Pult)", color = Muted, fontSize = 12.sp)
+                        Chips(
+                            if (type == RoofType.GABLE) listOf("Längs zur Breite", "Längs zur Tiefe") else listOf("Oben (Nord)", "Links (West)"),
+                            if (rx) 0 else 1
+                        ) { rx = it == 0 }
+                    }
+                }
+            },
+            confirmButton = {
+                TextButton(onClick = {
+                    pushUndo()
+                    p = p.copy(
+                        roof = type,
+                        pitch = (num(pitch) ?: p.pitch).coerceIn(5.0, 70.0),
+                        overhang = (num(ov) ?: p.overhang).coerceIn(0.0, 3.0),
+                        ridgeX = rx
+                    )
+                    roofDlg = false
+                }) { Text("OK") }
+            },
+            dismissButton = { TextButton(onClick = { roofDlg = false }) { Text("Abbrechen") } }
+        )
+    }
+
     if (renameDlg) {
-        var tmp by remember { mutableStateOf(name) }
+        var tmp by remember { mutableStateOf(p.name) }
         AlertDialog(
             onDismissRequest = { renameDlg = false },
             title = { Text("Name des Plans") },
             text = { OutlinedTextField(value = tmp, onValueChange = { tmp = it }, singleLine = true) },
-            confirmButton = { TextButton(onClick = { if (tmp.isNotBlank()) name = tmp.trim(); renameDlg = false }) { Text("OK") } },
+            confirmButton = { TextButton(onClick = { if (tmp.isNotBlank()) p = p.copy(name = tmp.trim()); renameDlg = false }) { Text("OK") } },
             dismissButton = { TextButton(onClick = { renameDlg = false }) { Text("Abbrechen") } }
         )
     }
 
-    if (editDlg && sel != null) {
-        EditDialog(
-            e = sel,
+    if (editDlg && selRoom != null) {
+        RoomDialog(
+            r = selRoom, plan = p,
+            onDismiss = { editDlg = false },
+            onOk = { nm, color, nw, nd ->
+                pushUndo()
+                var f1 = flv.copy(rooms = flv.rooms.map { if (it.id == selRoom.id) it.copy(name = nm, color = color) else it })
+                f1 = setRoomNet(p, f1, selRoom.id, nw, nd)
+                putFloor(fiIdx(), f1)
+                editDlg = false
+            }
+        )
+    }
+    if (editDlg && selEl != null) {
+        ElDialog(
+            e = selEl, f = flv,
             onDismiss = { editDlg = false },
             onOk = { n ->
                 pushUndo()
-                els = els.map { if (it.id == n.id) n else it }
+                putFloor(fiIdx(), flv.copy(els = flv.els.map { if (it.id == n.id) n else it }))
                 editDlg = false
             }
         )
     }
 }
 
-private val Color0x55 = androidx.compose.ui.graphics.Color(0x66000000)
-
 @Composable
 private fun BarButton(text: String, onClick: () -> Unit) {
-    FilledTonalButton(onClick = onClick, contentPadding = androidx.compose.foundation.layout.PaddingValues(horizontal = 12.dp, vertical = 4.dp)) {
+    FilledTonalButton(onClick = onClick, contentPadding = PaddingValues(horizontal = 12.dp, vertical = 4.dp)) {
         Text(text, fontSize = 13.sp, maxLines = 1)
     }
 }
 
 @Composable
-private fun EditDialog(e: El, onDismiss: () -> Unit, onOk: (El) -> Unit) {
-    var nm by remember { mutableStateOf(e.name) }
-    var w by remember { mutableStateOf(fmtNum(e.w)) }
-    var h by remember { mutableStateOf(fmtNum(e.h)) }
-    var rot by remember { mutableStateOf(String.format(Locale.GERMANY, "%.0f", e.rot)) }
-    var color by remember { mutableStateOf(e.color) }
-    val named = e.kind == Kind.ROOM || e.kind == Kind.FURN
-    val wLabel = if (e.kind == Kind.WALL) "Länge (m)" else "Breite (m)"
-    val hLabel = if (e.kind == Kind.WALL) "Dicke (m)" else "Tiefe (m)"
+private fun Chips(items: List<String>, sel: Int, onSel: (Int) -> Unit) {
+    Row(Modifier.horizontalScroll(rememberScrollState()).padding(top = 4.dp), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+        items.forEachIndexed { i, s ->
+            Box(
+                Modifier.background(if (i == sel) Gold else Panel2, RoundedCornerShape(8.dp))
+                    .clickable { onSel(i) }
+                    .padding(horizontal = 12.dp, vertical = 8.dp)
+            ) {
+                Text(s, color = if (i == sel) Color(0xFF1A1400) else Ink, fontSize = 13.sp, maxLines = 1)
+            }
+        }
+    }
+}
+
+@Composable
+private fun RoomDialog(r: Room, plan: Plan, onDismiss: () -> Unit, onOk: (String, Int, Double?, Double?) -> Unit) {
+    val net = plan.net(r)
+    var nm by remember { mutableStateOf(r.name) }
+    var w by remember { mutableStateOf(fmtNum(net.first)) }
+    var d by remember { mutableStateOf(fmtNum(net.second)) }
+    var color by remember { mutableStateOf(r.color) }
+    val kb = KeyboardOptions(keyboardType = KeyboardType.Decimal)
     AlertDialog(
         onDismissRequest = onDismiss,
-        title = { Text(e.kind.label + " bearbeiten") },
+        title = { Text("Raum bearbeiten") },
         text = {
             Column(Modifier.verticalScroll(rememberScrollState())) {
-                if (named) {
-                    OutlinedTextField(value = nm, onValueChange = { nm = it }, label = { Text("Name") }, singleLine = true)
-                    Spacer(Modifier.size(8.dp))
+                OutlinedTextField(value = nm, onValueChange = { nm = it }, label = { Text("Name") }, singleLine = true)
+                Spacer(Modifier.size(8.dp))
+                Text("Lichte Maße (zwischen den Wänden). Der Nachbarraum gibt nach.", color = Muted, fontSize = 12.sp)
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    OutlinedTextField(value = w, onValueChange = { w = it }, label = { Text("Breite (m)") }, singleLine = true, keyboardOptions = kb, modifier = Modifier.weight(1f))
+                    OutlinedTextField(value = d, onValueChange = { d = it }, label = { Text("Tiefe (m)") }, singleLine = true, keyboardOptions = kb, modifier = Modifier.weight(1f))
                 }
-                val kb = KeyboardOptions(keyboardType = KeyboardType.Decimal)
-                OutlinedTextField(value = w, onValueChange = { w = it }, label = { Text(wLabel) }, singleLine = true, keyboardOptions = kb)
-                if (e.kind != Kind.DOOR && e.kind != Kind.WINDOW) {
-                    Spacer(Modifier.size(8.dp))
-                    OutlinedTextField(value = h, onValueChange = { h = it }, label = { Text(hLabel) }, singleLine = true, keyboardOptions = kb)
-                }
-                if (e.kind != Kind.ROOM) {
-                    Spacer(Modifier.size(8.dp))
-                    OutlinedTextField(value = rot, onValueChange = { rot = it }, label = { Text("Drehung (Grad)") }, singleLine = true, keyboardOptions = kb)
-                }
-                if (e.kind == Kind.ROOM) {
-                    Spacer(Modifier.size(12.dp))
-                    Text("Farbe", color = Muted, fontSize = 12.sp)
-                    Row(horizontalArrangement = androidx.compose.foundation.layout.Arrangement.spacedBy(8.dp), modifier = Modifier.padding(top = 4.dp)) {
-                        ROOM_COLORS.forEachIndexed { i, c ->
-                            Box(
-                                Modifier.size(34.dp).background(c)
-                                    .border(if (i == color) 3.dp else 1.dp, if (i == color) Gold else Muted)
-                                    .clickable { color = i }
-                            )
-                        }
+                Spacer(Modifier.size(12.dp))
+                Text("Farbe", color = Muted, fontSize = 12.sp)
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.padding(top = 4.dp)) {
+                    ROOM_COLORS.forEachIndexed { i, c ->
+                        Box(
+                            Modifier.size(34.dp).background(c)
+                                .border(if (i == color) 3.dp else 1.dp, if (i == color) Gold else Muted)
+                                .clickable { color = i }
+                        )
                     }
-                    Spacer(Modifier.width(1.dp))
                 }
             }
         },
         confirmButton = {
             TextButton(onClick = {
-                val nw = (num(w) ?: e.w).coerceIn(0.05, 200.0)
-                val nh = (num(h) ?: e.h).coerceIn(0.05, 200.0)
-                val nr = ((num(rot) ?: e.rot) % 360.0 + 360.0) % 360.0
-                onOk(
-                    e.copy(
-                        name = if (named) nm.trim() else e.name,
-                        w = nw,
-                        h = if (e.kind == Kind.DOOR || e.kind == Kind.WINDOW) e.h else nh,
-                        rot = if (e.kind == Kind.ROOM) e.rot else nr,
-                        color = color
+                val nw = num(w)?.coerceIn(0.5, 100.0)
+                val nd = num(d)?.coerceIn(0.5, 100.0)
+                onOk(nm.trim(), color, nw, nd)
+            }) { Text("OK") }
+        },
+        dismissButton = { TextButton(onClick = onDismiss) { Text("Abbrechen") } }
+    )
+}
+
+@Composable
+private fun ElDialog(e: El, f: Floor, onDismiss: () -> Unit, onOk: (El) -> Unit) {
+    var nm by remember { mutableStateOf(e.name) }
+    var w by remember { mutableStateOf(fmtNum(e.w)) }
+    var h by remember { mutableStateOf(fmtNum(e.h)) }
+    var vh by remember { mutableStateOf(fmtNum(if (e.vh > 0) e.vh else if (e.kind == Kind.DOOR) 2.01 else 1.2)) }
+    var sill by remember { mutableStateOf(fmtNum(if (e.sill > 0 || e.kind != Kind.WINDOW) e.sill else 0.9)) }
+    var rot by remember { mutableStateOf(String.format(Locale.GERMANY, "%.0f", e.rot)) }
+    var sub by remember { mutableStateOf(e.sub) }
+    val kb = KeyboardOptions(keyboardType = KeyboardType.Decimal)
+    val isOpening = e.kind == Kind.DOOR || e.kind == Kind.WINDOW
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text(e.kind.label + " bearbeiten") },
+        text = {
+            Column(Modifier.verticalScroll(rememberScrollState())) {
+                if (e.kind == Kind.FURN) {
+                    OutlinedTextField(value = nm, onValueChange = { nm = it }, label = { Text("Name") }, singleLine = true)
+                    Spacer(Modifier.size(8.dp))
+                }
+                if (e.kind == Kind.STAIR) {
+                    Text("Treppenart", color = Muted, fontSize = 12.sp)
+                    val defs = listOf(Pair(1.0, 3.0), Pair(2.1, 3.0), Pair(2.2, 2.2), Pair(1.8, 1.8))
+                    Chips(StairType.values().map { it.label }, sub) {
+                        sub = it
+                        w = fmtNum(defs[it].first)
+                        h = fmtNum(defs[it].second)
+                    }
+                    Spacer(Modifier.size(8.dp))
+                }
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    OutlinedTextField(value = w, onValueChange = { w = it }, label = { Text("Breite (m)") }, singleLine = true, keyboardOptions = kb, modifier = Modifier.weight(1f))
+                    if (!isOpening) {
+                        OutlinedTextField(value = h, onValueChange = { h = it }, label = { Text(if (e.kind == Kind.STAIR) "Länge (m)" else "Tiefe (m)") }, singleLine = true, keyboardOptions = kb, modifier = Modifier.weight(1f))
+                    } else {
+                        OutlinedTextField(value = vh, onValueChange = { vh = it }, label = { Text("Höhe (m)") }, singleLine = true, keyboardOptions = kb, modifier = Modifier.weight(1f))
+                    }
+                }
+                if (e.kind == Kind.WINDOW) {
+                    Spacer(Modifier.size(8.dp))
+                    OutlinedTextField(value = sill, onValueChange = { sill = it }, label = { Text("Brüstungshöhe (m)") }, singleLine = true, keyboardOptions = kb)
+                }
+                if (!isOpening) {
+                    Spacer(Modifier.size(8.dp))
+                    OutlinedTextField(value = rot, onValueChange = { rot = it }, label = { Text("Drehung (Grad)") }, singleLine = true, keyboardOptions = kb)
+                }
+                if (e.kind == Kind.STAIR) {
+                    val n = stairSteps(f)
+                    val rise = (f.height + SLAB) / n * 100
+                    Spacer(Modifier.size(8.dp))
+                    Text(
+                        n.toString() + " Stufen bis zum nächsten Geschoss (Steigung ca. " + String.format(Locale.GERMANY, "%.1f", rise) + " cm, Raumhöhe " + fmtM(f.height) + " m)",
+                        color = Muted, fontSize = 12.sp
                     )
+                }
+            }
+        },
+        confirmButton = {
+            TextButton(onClick = {
+                val nw = (num(w) ?: e.w).coerceIn(0.1, 50.0)
+                val nh = (num(h) ?: e.h).coerceIn(0.1, 50.0)
+                val nr = ((num(rot) ?: e.rot) % 360.0 + 360.0) % 360.0
+                val maxH = f.height
+                val nv = (num(vh) ?: 1.2).coerceIn(0.3, maxH)
+                val ns = (num(sill) ?: 0.9).coerceIn(0.0, max(0.0, maxH - 0.3))
+                onOk(
+                    when (e.kind) {
+                        Kind.DOOR -> e.copy(w = nw, vh = nv)
+                        Kind.WINDOW -> e.copy(w = nw, vh = nv, sill = ns)
+                        Kind.FURN -> e.copy(name = nm.trim(), w = nw, h = nh, rot = nr)
+                        Kind.STAIR -> e.copy(w = nw, h = nh, rot = nr, sub = sub)
+                    }
                 )
             }) { Text("OK") }
         },
         dismissButton = { TextButton(onClick = onDismiss) { Text("Abbrechen") } }
     )
+}
+
+@Composable
+private fun ViewScreen(p: Plan, onBack: () -> Unit) {
+    val density = LocalDensity.current.density
+    var side by remember { mutableStateOf(0) }
+    BackHandler { onBack() }
+    Column(Modifier.fillMaxSize().background(Forest)) {
+        Row(
+            Modifier.fillMaxWidth().background(Panel).padding(horizontal = 4.dp, vertical = 2.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            IconButton(onClick = onBack) { Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Zurück", tint = Ink) }
+            Text("Ansicht · " + p.name, color = Ink, fontWeight = FontWeight.Bold, fontSize = 17.sp, maxLines = 1, modifier = Modifier.weight(1f))
+        }
+        Row(Modifier.fillMaxWidth().background(Panel2).padding(horizontal = 8.dp, vertical = 4.dp)) {
+            Chips(VIEW_NAMES, side) { side = it }
+        }
+        Canvas(Modifier.weight(1f).fillMaxWidth().background(Color.White)) {
+            drawView(p, side, 12f * density)
+        }
+    }
 }

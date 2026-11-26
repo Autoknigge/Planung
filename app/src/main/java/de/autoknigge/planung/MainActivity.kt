@@ -188,9 +188,9 @@ private fun ListScreen(
                         ) {
                             Column(Modifier.weight(1f)) {
                                 Text(p.name, color = Ink, fontSize = 17.sp, fontWeight = FontWeight.SemiBold, maxLines = 1)
-                                val rooms = p.els.count { it.kind == Kind.ROOM }
+                                val rooms = p.floors.sumOf { it.rooms.size }
                                 Text(
-                                    (if (rooms == 1) "1 Raum" else "$rooms Räume") + " · " + fmtArea(p.roomArea) + " · " +
+                                    (if (rooms == 1) "1 Raum" else "$rooms Räume") + " · " + (if (p.floors.size == 1) "1 Geschoss" else "${p.floors.size} Geschosse") + " · " + fmtArea(p.roomArea) + " · " +
                                         DateFormat.getDateInstance(DateFormat.MEDIUM).format(Date(p.updated)),
                                     color = Muted, fontSize = 12.sp
                                 )

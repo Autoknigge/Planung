@@ -21,21 +21,31 @@ import kotlin.math.max
 import kotlin.math.min
 
 object Export {
-    /** Plan als Bild: passt auf [maxPx] Pixel an der längeren Seite, mit Rand. Null bei leerem Plan. */
-    fun render(plan: Plan, maxPx: Int = 2400): Bitmap? {
-        val b = boundsOf(plan.els) ?: return null
-        val margin = 1.0
-        val wm = (b[2] - b[0]) + 2 * margin
-        val hm = (b[3] - b[1]) + 2 * margin
+    /** Ein Geschoss als Bild, mit Außenmaßen. */
+    fun renderFloor(plan: Plan, fi: Int, maxPx: Int = 2400): Bitmap {
+        val x0 = -2.2
+        val y0 = -2.2
+        val wm = plan.w + 0.6 - x0
+        val hm = plan.d + 0.6 - y0
         val scale = min(maxPx / wm, maxPx / hm).toFloat().coerceAtMost(400f)
         val wp = max(200, (wm * scale).toInt())
         val hp = max(200, (hm * scale).toInt())
         val image = ImageBitmap(wp, hp)
         val canvas = Canvas(image)
-        val origin = Offset(((margin - b[0]) * scale).toFloat(), ((margin - b[1]) * scale).toFloat())
+        val origin = Offset((-x0 * scale).toFloat(), (-y0 * scale).toFloat())
         CanvasDrawScope().draw(Density(1f), LayoutDirection.Ltr, canvas, Size(wp.toFloat(), hp.toFloat())) {
             drawRect(androidx.compose.ui.graphics.Color.White)
-            drawPlan(plan.els, scale, origin, (scale * 0.2f).coerceIn(12f, 40f), null, false, true)
+            drawFloor(plan, fi, scale, origin, (scale * 0.2f).coerceIn(12f, 40f), null, false, true, true)
+        }
+        return image.asAndroidBitmap()
+    }
+
+    fun renderView(plan: Plan, side: Int, wPx: Int = 1800, hPx: Int = 1200): Bitmap {
+        val image = ImageBitmap(wPx, hPx)
+        val canvas = Canvas(image)
+        CanvasDrawScope().draw(Density(1f), LayoutDirection.Ltr, canvas, Size(wPx.toFloat(), hPx.toFloat())) {
+            drawRect(androidx.compose.ui.graphics.Color.White)
+            drawView(plan, side, wPx / 55f)
         }
         return image.asAndroidBitmap()
     }
@@ -53,38 +63,58 @@ object Export {
         ctx.startActivity(Intent.createChooser(send, "Plan teilen").addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
     }
 
-    fun sharePng(ctx: Context, plan: Plan): Boolean {
-        val bmp = render(plan) ?: return false
+    /** Das gerade angezeigte Geschoss als PNG teilen. */
+    fun sharePng(ctx: Context, plan: Plan, fi: Int): Boolean {
+        val i = fi.coerceIn(0, plan.floors.lastIndex)
+        val bmp = renderFloor(plan, i)
         val dir = File(ctx.cacheDir, "export").apply { mkdirs() }
-        val f = File(dir, safeName(plan.name) + ".png")
+        val f = File(dir, safeName(plan.name) + "_" + safeName(plan.floors[i].name) + ".png")
         FileOutputStream(f).use { bmp.compress(Bitmap.CompressFormat.PNG, 100, it) }
         share(ctx, f, "image/png", plan.name)
         return true
     }
 
-    fun sharePdf(ctx: Context, plan: Plan): Boolean {
-        val bmp = render(plan, 3000) ?: return false
-        val landscape = bmp.width >= bmp.height
+    private fun addPage(doc: PdfDocument, no: Int, plan: Plan, title: String, sub: String, draw: (AndroidCanvas, Float, Float, Float, Float) -> Unit, landscape: Boolean) {
         val pw = if (landscape) 842 else 595
         val ph = if (landscape) 595 else 842
-        val doc = PdfDocument()
-        val page = doc.startPage(PdfDocument.PageInfo.Builder(pw, ph, 1).create())
+        val page = doc.startPage(PdfDocument.PageInfo.Builder(pw, ph, no).create())
         val c: AndroidCanvas = page.canvas
         val titlePaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { textSize = 18f; isFakeBoldText = true; color = 0xFF222222.toInt() }
         val small = Paint(Paint.ANTI_ALIAS_FLAG).apply { textSize = 10f; color = 0xFF666666.toInt() }
-        c.drawText(plan.name, 30f, 36f, titlePaint)
-        c.drawText("Raumfläche gesamt: " + fmtArea(plan.roomArea), 30f, 52f, small)
-        val areaTop = 64f
-        val areaW = pw - 60f
-        val areaH = ph - areaTop - 34f
-        val f = min(areaW / bmp.width, areaH / bmp.height)
-        val dw = bmp.width * f
-        val dh = bmp.height * f
-        val left = 30f + (areaW - dw) / 2
-        val dest = android.graphics.RectF(left, areaTop, left + dw, areaTop + dh)
-        c.drawBitmap(bmp, null, dest, Paint(Paint.FILTER_BITMAP_FLAG))
+        c.drawText(plan.name + " – " + title, 30f, 36f, titlePaint)
+        c.drawText(sub, 30f, 52f, small)
+        draw(c, 30f, 64f, pw - 60f, ph - 64f - 34f)
         c.drawText("Erstellt mit Planung · autoknigge.de · Maße ohne Gewähr, keine Bauzeichnung", 30f, ph - 16f, small)
         doc.finishPage(page)
+    }
+
+    private fun place(c: AndroidCanvas, bmp: Bitmap, l: Float, t: Float, w: Float, h: Float) {
+        val f = min(w / bmp.width, h / bmp.height)
+        val dw = bmp.width * f
+        val dh = bmp.height * f
+        val left = l + (w - dw) / 2
+        c.drawBitmap(bmp, null, android.graphics.RectF(left, t, left + dw, t + dh), Paint(Paint.FILTER_BITMAP_FLAG))
+    }
+
+    /** Alle Geschosse und die Ansichten als PDF teilen. */
+    fun sharePdf(ctx: Context, plan: Plan): Boolean {
+        val doc = PdfDocument()
+        var no = 1
+        plan.floors.forEachIndexed { i, f ->
+            val bmp = renderFloor(plan, i, 3000)
+            val land = bmp.width >= bmp.height
+            val sub = "Raumhöhe " + fmtM(f.height) + " m · Wohnfläche " + fmtArea(plan.areaOf(f)) +
+                " · Außenmaße " + fmtM(plan.w) + " × " + fmtM(plan.d) + " m · Wände außen " + (plan.outerT * 100).toInt() + " cm, innen " + (plan.innerT * 100).toInt() + " cm"
+            addPage(doc, no++, plan, f.name, sub, { c, l, t, w, h -> place(c, bmp, l, t, w, h) }, land)
+        }
+        val views = (0..3).map { renderView(plan, it, 1400, 1000) }
+        addPage(doc, no++, plan, "Ansichten", "Vorne, rechts, hinten, links", { c, l, t, w, h ->
+            val cw = w / 2 - 4f
+            val ch = h / 2 - 4f
+            for (k in 0..3) place(c, views[k], l + (k % 2) * (cw + 8f), t + (k / 2) * (ch + 8f), cw, ch)
+        }, true)
+        val roof = renderView(plan, 4, 1600, 1100)
+        addPage(doc, no, plan, "Dach", plan.roof.label, { c, l, t, w, h -> place(c, roof, l, t, w, h) }, true)
         val dir = File(ctx.cacheDir, "export").apply { mkdirs() }
         val file = File(dir, safeName(plan.name) + ".pdf")
         FileOutputStream(file).use { doc.writeTo(it) }
