@@ -63,6 +63,14 @@ object Export {
         ctx.startActivity(Intent.createChooser(send, "Plan teilen").addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
     }
 
+    /** Sicherungsdatei: enthält den ganzen Plan und lässt sich in der App wieder öffnen. */
+    fun shareBackup(ctx: Context, plan: Plan) {
+        val dir = File(ctx.cacheDir, "export").apply { mkdirs() }
+        val f = File(dir, safeName(plan.name) + ".planung")
+        f.writeText(Store.toJson(listOf(plan)))
+        share(ctx, f, "application/octet-stream", plan.name)
+    }
+
     /** Das gerade angezeigte Geschoss als PNG teilen. */
     fun sharePng(ctx: Context, plan: Plan, fi: Int): Boolean {
         val i = fi.coerceIn(0, plan.floors.lastIndex)

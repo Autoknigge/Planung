@@ -247,6 +247,15 @@ fun EditorScreen(plan: Plan, onSave: (Plan) -> Unit, onBack: () -> Unit) {
                         menu = false
                         Export.sharePng(ctx, latest.value, fiIdx())
                     })
+                    DropdownMenuItem(text = { Text("Jetzt speichern") }, onClick = {
+                        menu = false
+                        onSave(latest.value.copy(updated = System.currentTimeMillis()))
+                        Toast.makeText(ctx, "Gespeichert", Toast.LENGTH_SHORT).show()
+                    })
+                    DropdownMenuItem(text = { Text("Sicherungsdatei teilen (zum Wiederöffnen)") }, onClick = {
+                        menu = false
+                        Export.shareBackup(ctx, latest.value)
+                    })
                     DropdownMenuItem(text = { Text("Alles als PDF teilen") }, onClick = {
                         menu = false
                         Export.sharePdf(ctx, latest.value)

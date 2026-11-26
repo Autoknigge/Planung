@@ -203,11 +203,17 @@ object Store {
     }
 
     fun load(ctx: Context): MutableList<Plan> {
+        val f = file(ctx)
+        if (!f.exists()) return mutableListOf()
+        return try { parse(f.readText()) } catch (e: Exception) { mutableListOf() }
+    }
+
+    /** Pläne aus Text (interne Datei oder Sicherungsdatei) lesen. Ein einzelner Plan als Objekt ist auch erlaubt. */
+    fun parse(text: String): MutableList<Plan> {
         val out = mutableListOf<Plan>()
         try {
-            val f = file(ctx)
-            if (!f.exists()) return out
-            val arr = JSONArray(f.readText())
+            val t = text.trim()
+            val arr = if (t.startsWith("[")) JSONArray(t) else JSONArray().put(JSONObject(t))
             for (i in 0 until arr.length()) {
                 try {
                     val o = arr.getJSONObject(i)
@@ -276,9 +282,24 @@ object Store {
         return out
     }
 
+    fun toJson(plans: List<Plan>): String = toArray(plans).toString()
+
     fun save(ctx: Context, plans: List<Plan>) {
         try {
-            val arr = JSONArray()
+            val arr = toArray(plans)
+            val tmp = File(ctx.filesDir, "plans.json.tmp")
+            tmp.writeText(arr.toString())
+            if (!tmp.renameTo(file(ctx))) {
+                file(ctx).writeText(arr.toString())
+                tmp.delete()
+            }
+        } catch (e: Exception) {
+        }
+    }
+
+    private fun toArray(plans: List<Plan>): JSONArray {
+        val arr = JSONArray()
+        try {
             for (p in plans) {
                 val o = JSONObject()
                 o.put("id", p.id)
@@ -336,13 +357,8 @@ object Store {
                 o.put("floors", fa)
                 arr.put(o)
             }
-            val tmp = File(ctx.filesDir, "plans.json.tmp")
-            tmp.writeText(arr.toString())
-            if (!tmp.renameTo(file(ctx))) {
-                file(ctx).writeText(arr.toString())
-                tmp.delete()
-            }
         } catch (e: Exception) {
         }
+        return arr
     }
 }

@@ -104,7 +104,11 @@ private fun Root() {
                         plans.add(0, p.copy(id = java.util.UUID.randomUUID().toString(), name = p.name + " (Kopie)", updated = System.currentTimeMillis()))
                         persist()
                     },
-                    onDelete = { p -> plans.removeAll { it.id == p.id }; persist() }
+                    onDelete = { p -> plans.removeAll { it.id == p.id }; persist() },
+                    onImport = { list ->
+                        list.forEach { plans.add(0, it.copy(id = java.util.UUID.randomUUID().toString(), updated = System.currentTimeMillis())) }
+                        persist()
+                    }
                 )
             } else {
                 BackHandler { openId = null }
@@ -143,13 +147,28 @@ private fun ListScreen(
     onCreate: (String) -> Unit,
     onRename: (Plan, String) -> Unit,
     onCopy: (Plan) -> Unit,
-    onDelete: (Plan) -> Unit
+    onDelete: (Plan) -> Unit,
+    onImport: (List<Plan>) -> Unit
 ) {
     val ctx = LocalContext.current
     var newDlg by remember { mutableStateOf(false) }
     var renameFor by remember { mutableStateOf<Plan?>(null) }
     var deleteFor by remember { mutableStateOf<Plan?>(null) }
     var menu by remember { mutableStateOf(false) }
+    val picker = androidx.activity.compose.rememberLauncherForActivityResult(
+        androidx.activity.result.contract.ActivityResultContracts.OpenDocument()
+    ) { uri ->
+        if (uri != null) {
+            val list = try {
+                ctx.contentResolver.openInputStream(uri)?.use { Store.parse(it.bufferedReader().readText()) } ?: emptyList()
+            } catch (e: Exception) { emptyList() }
+            if (list.isEmpty()) android.widget.Toast.makeText(ctx, "Diese Datei enthält keinen Plan.", android.widget.Toast.LENGTH_LONG).show()
+            else {
+                onImport(list)
+                android.widget.Toast.makeText(ctx, if (list.size == 1) "Plan geöffnet" else "${list.size} Pläne geöffnet", android.widget.Toast.LENGTH_SHORT).show()
+            }
+        }
+    }
 
     Column(Modifier.fillMaxSize()) {
         Row(Modifier.fillMaxWidth().padding(start = 20.dp, end = 8.dp, top = 12.dp, bottom = 4.dp), verticalAlignment = Alignment.CenterVertically) {
@@ -160,6 +179,10 @@ private fun ListScreen(
             Box {
                 IconButton(onClick = { menu = true }) { Icon(Icons.Filled.MoreVert, contentDescription = "Menü", tint = Ink) }
                 DropdownMenu(expanded = menu, onDismissRequest = { menu = false }) {
+                    DropdownMenuItem(text = { Text("Plan aus Sicherungsdatei öffnen") }, onClick = {
+                        menu = false
+                        try { picker.launch(arrayOf("*/*")) } catch (e: Exception) {}
+                    })
                     DropdownMenuItem(text = { Text("Werbe-Einstellungen") }, onClick = {
                         menu = false
                         ctx.activity()?.let { Ads.showPrivacyOptions(it) }
