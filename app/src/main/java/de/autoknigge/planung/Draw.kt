@@ -128,7 +128,8 @@ fun DrawScope.drawFloor(
     selectedId: String?,
     grid: Boolean,
     roomDims: Boolean,
-    outerDims: Boolean
+    outerDims: Boolean,
+    gap: Room? = null
 ) {
     val f = p.floors[fi]
     val t = Tf(scale, origin)
@@ -154,6 +155,13 @@ fun DrawScope.drawFloor(
     // Räume
     for (r in f.rooms) {
         wrect(t, r.x0, r.y0, r.x1 - r.x0, r.y1 - r.y0, ROOM_COLORS[r.color.coerceIn(0, ROOM_COLORS.size - 1)])
+    }
+    if (gap != null) {
+        drawRect(Color(0x33E57373), Offset(t.x(gap.x0), t.y(gap.y0)), Size(t.s(gap.x1 - gap.x0), t.s(gap.y1 - gap.y0)))
+        drawRect(
+            SelectColor, Offset(t.x(gap.x0), t.y(gap.y0)), Size(t.s(gap.x1 - gap.x0), t.s(gap.y1 - gap.y0)),
+            style = Stroke(maxOf(1f, font * 0.12f) * 2f, pathEffect = PathEffect.dashPathEffect(floatArrayOf(font, font * 0.6f)))
+        )
     }
     // Treppe des Geschosses darunter (gestrichelt)
     if (fi > 0) {

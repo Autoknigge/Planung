@@ -358,3 +358,46 @@ fun moveSingle(p: Plan, rooms: List<Room>, id: String, e: OwnEdge, newPos: Doubl
         else (if (e.high) it.copy(y1 = np) else it.copy(y0 = np))
     }
 }
+
+/** Freies Rechteck (Lücke zwischen den Räumen) an einem Punkt, oder null wenn dort ein Raum liegt. */
+fun freeRectAt(p: Plan, f: Floor, wx: Double, wy: Double): Room? {
+    val xs = distinct2(listOf(p.ix0, p.ix1) + f.rooms.flatMap { listOf(it.x0, it.x1) })
+    val ys = distinct2(listOf(p.iy0, p.iy1) + f.rooms.flatMap { listOf(it.y0, it.y1) })
+    fun free(i: Int, j: Int): Boolean {
+        if (i < 0 || j < 0 || i >= xs.size - 1 || j >= ys.size - 1) return false
+        val cx = (xs[i] + xs[i + 1]) / 2
+        val cy = (ys[j] + ys[j + 1]) / 2
+        return f.rooms.none { cx > it.x0 && cx < it.x1 && cy > it.y0 && cy < it.y1 }
+    }
+    var ci = -1
+    var cj = -1
+    for (i in 0 until xs.size - 1) if (wx >= xs[i] && wx <= xs[i + 1]) ci = i
+    for (j in 0 until ys.size - 1) if (wy >= ys[j] && wy <= ys[j + 1]) cj = j
+    if (!free(ci, cj)) return null
+    var i0 = ci
+    var i1 = ci
+    while (free(i0 - 1, cj)) i0--
+    while (free(i1 + 1, cj)) i1++
+    var j0 = cj
+    var j1 = cj
+    while ((i0..i1).all { free(it, j0 - 1) }) j0--
+    while ((i0..i1).all { free(it, j1 + 1) }) j1++
+    return Room(name = "Raum", x0 = xs[i0], x1 = xs[i1 + 1], y0 = ys[j0], y1 = ys[j1 + 1])
+}
+
+private fun distinct2(v: List<Double>): List<Double> {
+    val out = mutableListOf<Double>()
+    for (x in v.sorted()) if (out.isEmpty() || x - out.last() > 0.002) out.add(x)
+    return out
+}
+
+/** Räume, die genau an der Lücke anliegen (gleiche Kantenlänge) und sich dorthin ausdehnen können. */
+fun gapNeighbours(f: Floor, g: Room): List<Room> = f.rooms.filter { r ->
+    val sameY = eq(r.y0, g.y0) && eq(r.y1, g.y1)
+    val sameX = eq(r.x0, g.x0) && eq(r.x1, g.x1)
+    (sameY && (eq(r.x1, g.x0) || eq(r.x0, g.x1))) || (sameX && (eq(r.y1, g.y0) || eq(r.y0, g.y1)))
+}
+
+fun growInto(r: Room, g: Room): Room = r.copy(
+    x0 = min(r.x0, g.x0), x1 = max(r.x1, g.x1), y0 = min(r.y0, g.y0), y1 = max(r.y1, g.y1)
+)

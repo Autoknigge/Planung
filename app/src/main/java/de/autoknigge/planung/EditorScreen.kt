@@ -101,6 +101,7 @@ fun EditorScreen(plan: Plan, onSave: (Plan) -> Unit, onBack: () -> Unit) {
     var mergeSrc by remember { mutableStateOf<String?>(null) }
     var cornerDlg by remember { mutableStateOf(false) }
     var placeKind by remember { mutableStateOf<Kind?>(null) }
+    var gap by remember { mutableStateOf<Room?>(null) }
     val undo = remember { mutableStateListOf<Plan>() }
 
     val latest = rememberUpdatedState(p)
@@ -238,6 +239,11 @@ fun EditorScreen(plan: Plan, onSave: (Plan) -> Unit, onBack: () -> Unit) {
         val inInner = wx >= p.ix0 && wx <= p.ix1 && wy >= p.iy0 && wy <= p.iy1
         selId = if (inHouse && !inInner) "OUTER"
         else fl().rooms.firstOrNull { wx >= it.x0 && wx <= it.x1 && wy >= it.y0 && wy <= it.y1 }?.id
+        gap = null
+        if (selId == null && inInner) {
+            val g = freeRectAt(p, fl(), wx, wy)
+            if (g != null) { gap = g; selId = "GAP" }
+        }
     }
 
     val flv = fl()
@@ -482,7 +488,7 @@ fun EditorScreen(plan: Plan, onSave: (Plan) -> Unit, onBack: () -> Unit) {
                         }
                     }
             ) {
-                drawFloor(p, fiIdx(), scale, origin, 12f * density, selId, true, dimsOn, outerOn)
+                drawFloor(p, fiIdx(), scale, origin, 12f * density, selId, true, dimsOn, outerOn, if (selId == "GAP") gap else null)
             }
             if (flv.els.isEmpty() && p.floors.size == 1 && flv.rooms.size == 1) {
                 Text(
@@ -494,13 +500,33 @@ fun EditorScreen(plan: Plan, onSave: (Plan) -> Unit, onBack: () -> Unit) {
             }
         }
 
-        if (selRoom != null || selEl != null || outerSel) {
+        val gp = if (selId == "GAP") gap else null
+        if (selRoom != null || selEl != null || outerSel || gp != null) {
             Row(
                 Modifier.fillMaxWidth().background(Panel2).horizontalScroll(rememberScrollState()).padding(horizontal = 8.dp, vertical = 4.dp),
                 horizontalArrangement = Arrangement.spacedBy(6.dp),
                 verticalAlignment = Alignment.CenterVertically
             ) {
-                if (selRoom != null) {
+                if (gp != null) {
+                    Text("Lücke · " + fmtM(gp.x1 - gp.x0) + " × " + fmtM(gp.y1 - gp.y0) + " m", color = Ink, fontSize = 13.sp)
+                    BarButton("Raum daraus machen") {
+                        pushUndo()
+                        val nr = gp.copy(id = UUID.randomUUID().toString(), name = "Raum " + (flv.rooms.size + 1), color = flv.rooms.size % ROOM_COLORS.size)
+                        putFloor(fiIdx(), flv.copy(rooms = flv.rooms + nr))
+                        selId = nr.id
+                        gap = null
+                    }
+                    val nb = gapNeighbours(flv, gp)
+                    for (r in nb) {
+                        BarButton("An " + r.name.ifBlank { "Raum" } + " anschließen") {
+                            pushUndo()
+                            putFloor(fiIdx(), flv.copy(rooms = flv.rooms.map { if (it.id == r.id) growInto(it, gp) else it }))
+                            selId = r.id
+                            gap = null
+                        }
+                    }
+                    if (nb.isEmpty()) Text("Passt zu keinem Nachbarn genau. Raumkante antippen und in die Lücke ziehen.", color = Muted, fontSize = 12.sp)
+                } else if (selRoom != null) {
                     val n = p.net(selRoom)
                     Text(selRoom.name.ifBlank { "Raum" } + " · " + fmtArea(n.first * n.second) + " · " + fmtM(n.first) + " × " + fmtM(n.second) + " m", color = Ink, fontSize = 13.sp)
                     BarButton("Bearbeiten") { editDlg = true }
