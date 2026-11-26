@@ -1,7 +1,8 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <!-- Googles Test-Kennungen. Vor der Veröffentlichung durch die eigenen AdMob-Kennungen ersetzen und admob_test_mode auf false setzen. -->
-    <string name="admob_app_id" translatable="false">ca-app-pub-3940256099942544~3347511713</string>
-    <string name="admob_banner_id" translatable="false">ca-app-pub-3940256099942544/9214589741</string>
-    <bool name="admob_test_mode">true</bool>
+    <!-- Eigene AdMob-Kennungen (Konto von Marc). Testanzeigen auf dem eigenen Handy: in AdMob unter Einstellungen > Testgeräte eintragen. -->
+    <string name="admob_app_id" translatable="false">ca-app-pub-7178658520690671~6405522900</string>
+    <string name="admob_banner_id" translatable="false">ca-app-pub-7178658520690671/4465755274</string>
+    <string name="admob_appopen_id" translatable="false">ca-app-pub-7178658520690671/2888241889</string>
+    <bool name="admob_test_mode">false</bool>
 </resources>

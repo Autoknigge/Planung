@@ -61,6 +61,8 @@ class MainActivity : ComponentActivity() {
             navigationBarStyle = SystemBarStyle.dark(android.graphics.Color.TRANSPARENT)
         )
         setContent { PlanungTheme { Root() } }
+        // Startanzeige nur beim frischen Start, nicht nach einer Drehung
+        if (savedInstanceState == null) Ads.showStartAd(this)
     }
 }
 

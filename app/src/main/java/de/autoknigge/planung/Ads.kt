@@ -9,6 +9,8 @@ import com.google.android.gms.ads.AdListener
 import com.google.android.gms.ads.AdRequest
 import com.google.android.gms.ads.AdSize
 import com.google.android.gms.ads.AdView
+import com.google.android.gms.ads.FullScreenContentCallback
+import com.google.android.gms.ads.appopen.AppOpenAd
 import com.google.android.gms.ads.LoadAdError
 import com.google.android.gms.ads.MobileAds
 import com.google.android.ump.ConsentInformation
@@ -66,6 +68,35 @@ object Ads {
             override fun onAdFailedToLoad(error: LoadAdError) {}
         }
         view.loadAd(AdRequest.Builder().build())
+    }
+
+    /** Beim App-Start: lädt die Startanzeige (App Open) und zeigt sie im Vollbild, sobald sie bereit ist. */
+    fun showStartAd(activity: Activity) {
+        whenAllowed(activity) {
+            init(activity)
+            val unit = if (testMode(activity)) "ca-app-pub-3940256099942544/9257395921" else activity.getString(R.string.admob_appopen_id)
+            AppOpenAd.load(
+                activity,
+                unit,
+                AdRequest.Builder().build(),
+                object : AppOpenAd.AppOpenAdLoadCallback() {
+                    override fun onAdLoaded(ad: AppOpenAd) {
+                        if (activity.isFinishing || activity.isDestroyed) return
+                        ad.fullScreenContentCallback = object : FullScreenContentCallback() {
+                            override fun onAdDismissedFullScreenContent() {
+                                activity.window.decorView.postDelayed({
+                                    activity.window.decorView.requestLayout()
+                                    activity.window.decorView.invalidate()
+                                }, 150)
+                            }
+                        }
+                        ad.show(activity)
+                    }
+
+                    override fun onAdFailedToLoad(error: LoadAdError) {}
+                }
+            )
+        }
     }
 
     /** Öffnet die Werbe-Einstellungen: Einwilligungsformular, falls nötig, sonst eine Erklärung mit Link zu Google. */
