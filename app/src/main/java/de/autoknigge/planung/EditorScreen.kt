@@ -100,6 +100,7 @@ fun EditorScreen(plan: Plan, onSave: (Plan) -> Unit, onBack: () -> Unit) {
     var showView by remember { mutableStateOf(false) }
     var mergeSrc by remember { mutableStateOf<String?>(null) }
     var cornerDlg by remember { mutableStateOf(false) }
+    var placeKind by remember { mutableStateOf<Kind?>(null) }
     val undo = remember { mutableStateListOf<Plan>() }
 
     val latest = rememberUpdatedState(p)
@@ -171,7 +172,7 @@ fun EditorScreen(plan: Plan, onSave: (Plan) -> Unit, onBack: () -> Unit) {
     fun hitEl(pt: Offset): El? {
         val wx = ((pt.x - origin.x) / scale).toDouble()
         val wy = ((pt.y - origin.y) / scale).toDouble()
-        val margin = (8f * density / scale).toDouble()
+        val margin = (16f * density / scale).toDouble()
         return fl().els.sortedByDescending { rank(it.kind) }.firstOrNull { hits(it, wx, wy, margin) }
     }
 
@@ -196,6 +197,23 @@ fun EditorScreen(plan: Plan, onSave: (Plan) -> Unit, onBack: () -> Unit) {
     }
 
     fun tapSelect(pt: Offset) {
+        val pk = placeKind
+        if (pk != null) {
+            val wx = ((pt.x - origin.x) / scale).toDouble()
+            val wy = ((pt.y - origin.y) / scale).toDouble()
+            val base = if (pk == Kind.DOOR) El(kind = pk, x = wx, y = wy, w = 0.9, h = 0.17, vh = 2.01)
+            else El(kind = pk, x = wx, y = wy, w = 1.2, h = 0.17, vh = 1.2, sill = 0.9)
+            val e = attachToWall(base, p, fl(), 1.2)
+            if (e.rot == 0.0 && e.x == wx && e.y == wy) {
+                Toast.makeText(ctx, "Bitte direkt auf eine Wand tippen.", Toast.LENGTH_SHORT).show()
+            } else {
+                pushUndo()
+                putFloor(fiIdx(), fl().copy(els = fl().els + e))
+                selId = e.id
+                placeKind = null
+            }
+            return
+        }
         val src = mergeSrc
         if (src != null) {
             val wx = ((pt.x - origin.x) / scale).toDouble()
@@ -383,13 +401,18 @@ fun EditorScreen(plan: Plan, onSave: (Plan) -> Unit, onBack: () -> Unit) {
                                                     if (t != null) {
                                                         var nx = snapTo(rawX, st)
                                                         var ny = snapTo(rawY, st)
-                                                        if (snapOn && t.kind != Kind.DOOR && t.kind != Kind.WINDOW) {
+                                                        if (t.kind == Kind.DOOR || t.kind == Kind.WINDOW) {
+                                                            val at = attachToWall(t.copy(x = nx, y = ny), p, f0, 1.5)
+                                                            putFloor(gi, f0.copy(els = f0.els.map { if (it.id == t.id) at else it }))
+                                                        } else {
+                                                        if (snapOn) {
                                                             val faces = wallFaces(p, f0)
                                                             val m = magnet(t, nx, ny, f0.els, faces.first, faces.second, (10f * density / scale).toDouble())
                                                             nx = m.first
                                                             ny = m.second
                                                         }
                                                         putFloor(gi, f0.copy(els = f0.els.map { if (it.id == t.id) it.copy(x = nx, y = ny) else it }))
+                                                        }
                                                     }
                                                 }
                                                 2 -> {
@@ -501,6 +524,26 @@ fun EditorScreen(plan: Plan, onSave: (Plan) -> Unit, onBack: () -> Unit) {
                         pushUndo()
                         putFloor(fiIdx(), flv.copy(els = flv.els.map { if (it.id == selEl.id) it.copy(rot = (it.rot + 90.0) % 360.0) else it }))
                     }
+                    if (selEl.kind == Kind.DOOR) {
+                        BarButton("Anschlag spiegeln") {
+                            pushUndo()
+                            putFloor(fiIdx(), flv.copy(els = flv.els.map { if (it.id == selEl.id) it.copy(sub = it.sub xor 1) else it }))
+                        }
+                        BarButton("Aufschlag drehen") {
+                            pushUndo()
+                            putFloor(fiIdx(), flv.copy(els = flv.els.map { if (it.id == selEl.id) it.copy(sub = it.sub xor 2) else it }))
+                        }
+                    }
+                    if (selEl.kind == Kind.DOOR || selEl.kind == Kind.WINDOW) {
+                        for (dir in listOf(-1.0, 1.0)) {
+                            BarButton(if (dir < 0) "◀ 10 cm" else "10 cm ▶") {
+                                pushUndo()
+                                val (vx, vy) = toWorldVec(selEl, dir * 0.1, 0.0)
+                                val moved = attachToWall(selEl.copy(x = selEl.x + vx, y = selEl.y + vy), p, flv, 0.5)
+                                putFloor(fiIdx(), flv.copy(els = flv.els.map { if (it.id == selEl.id) moved else it }))
+                            }
+                        }
+                    }
                     BarButton("Kopieren") {
                         pushUndo()
                         val c = selEl.copy(id = UUID.randomUUID().toString(), x = selEl.x + 0.5, y = selEl.y + 0.5)
@@ -524,8 +567,16 @@ fun EditorScreen(plan: Plan, onSave: (Plan) -> Unit, onBack: () -> Unit) {
             horizontalArrangement = Arrangement.spacedBy(6.dp)
         ) {
             BarButton("+ Raum") { addRoom() }
-            BarButton("+ Tür") { addEl(Kind.DOOR, "", 0.9, 0.17, vh = 2.01) }
-            BarButton("+ Fenster") { addEl(Kind.WINDOW, "", 1.2, 0.17, vh = 1.2, sill = 0.9) }
+            BarButton(if (placeKind == Kind.DOOR) "Wand antippen …" else "+ Tür") {
+                placeKind = if (placeKind == Kind.DOOR) null else Kind.DOOR
+                mergeSrc = null
+                if (placeKind != null) Toast.makeText(ctx, "Tippe dorthin, wo die Tür hin soll (auf eine Wand).", Toast.LENGTH_SHORT).show()
+            }
+            BarButton(if (placeKind == Kind.WINDOW) "Wand antippen …" else "+ Fenster") {
+                placeKind = if (placeKind == Kind.WINDOW) null else Kind.WINDOW
+                mergeSrc = null
+                if (placeKind != null) Toast.makeText(ctx, "Tippe dorthin, wo das Fenster hin soll (auf eine Wand).", Toast.LENGTH_SHORT).show()
+            }
             BarButton("+ Treppe") { stairDlg = true }
             BarButton("+ Möbel") { furnDlg = true }
             BarButton("Haus") { houseDlg = true }

@@ -238,6 +238,7 @@ fun DrawScope.drawFloor(
         withTransform({
             translate(c.x, c.y)
             rotate(e.rot.toFloat(), Offset.Zero)
+            if (e.kind == Kind.DOOR) scale(if (e.sub and 1 != 0) -1f else 1f, if (e.sub and 2 != 0) -1f else 1f, Offset.Zero)
         }) {
             when (e.kind) {
                 Kind.STAIR -> drawStair(e.sub, wp, hp, stairSteps(f), line, font)
