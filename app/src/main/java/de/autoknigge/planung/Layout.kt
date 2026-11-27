@@ -155,11 +155,20 @@ fun attachToWall(e: El, p: Plan, f: Floor, tol: Double): El {
     val s = best ?: return e
     val len = s.len
     val half = e.w / 2
-    val lo = s.t / 2 + half
-    val hi = len - s.t / 2 - half
-    val along = if (lo > hi) len / 2 else clampD(bt * len, lo, hi)
     val ux = (s.x1 - s.x0) / len
     val uy = (s.y1 - s.y0) / len
+    // Die ganze gerade Wand zählt, nicht nur das Stück zwischen zwei Anschlüssen
+    val ch = chainEdges(f.rooms, Pt(s.x0, s.y0), Pt(s.x1, s.y1))
+    var tmin = 0.0
+    var tmax = len
+    for ((c0, c1) in ch) for (q in listOf(c0, c1)) {
+        val tq = (q.x - s.x0) * ux + (q.y - s.y0) * uy
+        if (tq < tmin) tmin = tq
+        if (tq > tmax) tmax = tq
+    }
+    val lo = tmin + s.t / 2 + half
+    val hi = tmax - s.t / 2 - half
+    val along = if (lo > hi) (tmin + tmax) / 2 else clampD(bt * len, lo, hi)
     return e.copy(x = s.x0 + ux * along, y = s.y0 + uy * along, rot = s.angle, h = s.t + 0.02)
 }
 
