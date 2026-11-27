@@ -72,7 +72,7 @@ fun centroid(pts: List<Pt>): Pt {
 }
 
 /** Ecken, die mitten auf der Kante eines anderen Raums liegen, dort als Ecke einfügen. So teilen sich Räume ganze Wände. */
-fun normalize(rooms: List<Room>): List<Room> {
+fun normalize(rooms: List<Room>, tol: Double = EPS): List<Room> {
     val all = rooms.flatMap { it.pts }
     return rooms.map { r ->
         val out = mutableListOf<Pt>()
@@ -85,7 +85,7 @@ fun normalize(rooms: List<Room>): List<Room> {
             for (v in all) {
                 if (samePt(v, a) || samePt(v, b)) continue
                 val (dd, t) = segProj(v.x, v.y, a.x, a.y, b.x, b.y)
-                if (dd < EPS && t > 1e-6 && t < 1 - 1e-6) ins.add(Pair(t, v))
+                if (dd < tol && t > 1e-6 && t < 1 - 1e-6) ins.add(Pair(t, v))
             }
             for (q in ins.sortedBy { it.first }) if (!samePt(out.last(), q.second)) out.add(q.second)
         }
@@ -386,8 +386,22 @@ fun splitRoom(f: Floor, id: String, vertical: Boolean?): Floor? {
 private fun ccw(pts: List<Pt>): List<Pt> = if (signedArea(pts) < 0) pts.reversed() else pts
 
 /** Zwei Räume mit gemeinsamer Wand zu einem Raum vereinen (Name und Farbe von [a] bleiben). */
+/** Fast gleiche Punkte (bis [tol] m) zusammenführen und Punkte auf nahe Wände legen. */
+fun weld(rooms: List<Room>, tol: Double): List<Room> {
+    val reps = mutableListOf<Pt>()
+    fun snap(q: Pt): Pt {
+        val r = reps.firstOrNull { hypot(it.x - q.x, it.y - q.y) <= tol }
+        if (r != null) return r
+        reps.add(q)
+        return q
+    }
+    val w = rooms.map { r -> r.copy(pts = r.pts.map { snap(it) }.filterIndexed { i, q -> !samePt(q, r.pts.map { snap(it) }[(i + 1) % r.pts.size]) }) }
+    return normalize(w, tol)
+}
+
 fun mergeRooms(f0: Floor, a: String, b: String): Floor? {
-    val f = f0.copy(rooms = normalize(f0.rooms))
+    var f = f0.copy(rooms = normalize(f0.rooms))
+    f = f.copy(rooms = weld(f.rooms, 0.03))
     val ra = f.rooms.firstOrNull { it.id == a } ?: return null
     val rb = f.rooms.firstOrNull { it.id == b } ?: return null
     val ea = mutableListOf<Pair<Pt, Pt>>()
