@@ -747,11 +747,11 @@ fun EditorScreen(plan: Plan, onSave: (Plan) -> Unit, onBack: () -> Unit) {
             BarButton("Wände glätten") {
                 val f = fl()
                 val before = f.rooms.sumOf { it.pts.size }
-                val cleaned = simplifyAll(normalize(f.rooms.filter { polyArea(it.pts) >= 0.05 }))
+                val cleaned = straighten(simplifyAll(normalize(f.rooms.filter { polyArea(it.pts) >= 0.05 })))
                 val removed = before - cleaned.sumOf { it.pts.size }
                 pushUndo()
                 putFloor(fiIdx(), f.copy(rooms = cleaned))
-                Toast.makeText(ctx, if (removed > 0) "$removed überflüssige Punkte entfernt." else "Keine überflüssigen Punkte gefunden.", Toast.LENGTH_LONG).show()
+                Toast.makeText(ctx, (if (removed > 0) "$removed überflüssige Punkte entfernt. " else "Keine überflüssigen Punkte. ") + "Schiefe Wände sind gerade gezogen.", Toast.LENGTH_LONG).show()
             }
             BarButton("Haus verschieben") {
                 resetTools()

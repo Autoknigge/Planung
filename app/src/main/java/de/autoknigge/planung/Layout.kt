@@ -323,7 +323,9 @@ fun shellDelta(rooms: List<Room>, q: Pt, dx: Double, dy: Double): Pair<Double, D
             val s = dx * ux + dy * uy
             return Pair(ux * s, uy * s)
         }
+        return Pair(dx, dy) // echte Ecke: lässt sich ziehen
     }
+    if (inc.size == 1) return Pair(dx, dy)
     return Pair(0.0, 0.0)
 }
 
@@ -817,5 +819,29 @@ fun simplifyRoom(all: List<Room>, id: String): List<Room> = all.map { r ->
 fun simplifyAll(rooms: List<Room>): List<Room> {
     var cur = rooms
     for (r in rooms) cur = simplifyRoom(cur, r.id)
+    return cur
+}
+
+/** Fast senkrechte oder waagerechte Wände (bis 6 cm Schiefstand) gerade ziehen. */
+fun straighten(rooms: List<Room>): List<Room> {
+    var cur = rooms
+    repeat(30) {
+        var fixed = false
+        for ((a, b, _) in uniqueEdges(cur)) {
+            val dx = b.x - a.x
+            val dy = b.y - a.y
+            var mx = 0.0
+            var my = 0.0
+            var ok = false
+            if (abs(dx) in 0.0005..0.06 && abs(dy) > 0.5) { mx = (a.x + b.x) / 2 - a.x; ok = true }
+            else if (abs(dy) in 0.0005..0.06 && abs(dx) > 0.5) { my = (a.y + b.y) / 2 - a.y; ok = true }
+            if (!ok) continue
+            cur = movePoints(cur, listOf(a), mx, my, null)
+            cur = movePoints(cur, listOf(b), -mx, -my, null)
+            fixed = true
+            break
+        }
+        if (!fixed) return cur
+    }
     return cur
 }
