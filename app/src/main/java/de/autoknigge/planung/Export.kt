@@ -122,7 +122,7 @@ object Export {
             for (k in 0..3) place(c, views[k], l + (k % 2) * (cw + 8f), t + (k / 2) * (ch + 8f), cw, ch)
         }, true)
         val roof = renderView(plan, 4, 1600, 1100)
-        addPage(doc, no, plan, "Dach", plan.roof.label, { c, l, t, w, h -> place(c, roof, l, t, w, h) }, true)
+        addPage(doc, no, plan, "Dach", plan.roof.label + " · Dachfläche ca. " + fmtArea(roofArea(plan)), { c, l, t, w, h -> place(c, roof, l, t, w, h) }, true)
         val dir = File(ctx.cacheDir, "export").apply { mkdirs() }
         val file = File(dir, safeName(plan.name) + ".pdf")
         FileOutputStream(file).use { doc.writeTo(it) }

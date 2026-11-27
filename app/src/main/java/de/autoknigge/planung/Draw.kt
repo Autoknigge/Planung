@@ -697,6 +697,6 @@ private fun DrawScope.drawRoofTop(p: Plan, font: Float) {
             nc.drawText("Gefälle", (a.x + b.x) / 2, (a.y + b.y) / 2 - font * 0.6f, paint(font, 0xFF4A2A1C.toInt(), true))
         }
     }
-    val tw = fmtM(spanX) + " × " + fmtM(spanY) + " m mit Dachüberstand"
+    val tw = fmtM(spanX) + " × " + fmtM(spanY) + " m mit Dachüberstand · Dachfläche ca. " + fmtArea(roofArea(p))
     nc.drawText(tw, size.width / 2, size.height - font * 1.0f, fitted(tw, font, size.width - font * 2, 0xFF333333.toInt(), false))
 }

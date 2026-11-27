@@ -141,6 +141,12 @@ val FURNITURE = listOf(
     FurnType("Frei (Rechteck)", 1.00, 1.00)
 )
 
+/** Dachfläche in m²: Grundfläche mit Überständen durch cos(Neigung); Flachdach ohne Neigung. Näherung aus dem umgebenden Rechteck. */
+fun roofArea(p: Plan): Double {
+    val a = (p.w + p.ovW + p.ovE) * (p.d + p.ovN + p.ovS)
+    return if (p.roof == RoofType.FLAT) a else a / kotlin.math.cos(Math.toRadians(p.pitch))
+}
+
 fun fmtM(v: Double): String = String.format(Locale.GERMANY, "%.2f", v)
 fun fmtArea(v: Double): String = String.format(Locale.GERMANY, "%.2f m²", v)
 

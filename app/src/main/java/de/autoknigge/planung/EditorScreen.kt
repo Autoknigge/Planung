@@ -933,6 +933,12 @@ fun EditorScreen(plan: Plan, onSave: (Plan) -> Unit, onBack: () -> Unit) {
                         OutlinedTextField(value = ovW, onValueChange = { ovW = it }, label = { Text("Links") }, singleLine = true, keyboardOptions = kb, modifier = Modifier.weight(1f))
                         OutlinedTextField(value = ovE, onValueChange = { ovE = it }, label = { Text("Rechts") }, singleLine = true, keyboardOptions = kb, modifier = Modifier.weight(1f))
                     }
+                    Spacer(Modifier.size(8.dp))
+                    val preview = p.copy(
+                        roof = type, pitch = (num(pitch) ?: p.pitch).coerceIn(5.0, 70.0),
+                        ovS = num(ovS) ?: p.ovS, ovN = num(ovN) ?: p.ovN, ovW = num(ovW) ?: p.ovW, ovE = num(ovE) ?: p.ovE
+                    )
+                    Text("Dachfläche ca. " + fmtArea(roofArea(preview)), color = Ink, fontSize = 14.sp, fontWeight = FontWeight.Bold)
                     if (type == RoofType.GABLE || type == RoofType.SHED) {
                         Spacer(Modifier.size(8.dp))
                         Text(if (type == RoofType.GABLE) "Firstrichtung" else "Hohe Seite (Pult)", color = Muted, fontSize = 12.sp)
