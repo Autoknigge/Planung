@@ -417,6 +417,7 @@ fun EditorScreen(plan: Plan, onSave: (Plan) -> Unit, onBack: () -> Unit) {
                             var v0: Pt? = null
                             var edgeA: Pt? = null
                             var edgeB: Pt? = null
+                            var outerEdge = false
                             var chain: List<Pair<Pt, Pt>> = emptyList()
                             val cur = snapFloor.els.firstOrNull { it.id == selId }
                             val busy = tool != 0 || placeKind != null
@@ -438,6 +439,9 @@ fun EditorScreen(plan: Plan, onSave: (Plan) -> Unit, onBack: () -> Unit) {
                                             if (eh != null) {
                                                 mode = 5; edgeA = eh.first; edgeB = eh.second
                                                 chain = chainEdges(snapFloor.rooms, eh.first, eh.second)
+                                                outerEdge = uniqueEdges(snapFloor.rooms).any {
+                                                    it.third == 1 && ((samePt(it.first, eh.first) && samePt(it.second, eh.second)) || (samePt(it.first, eh.second) && samePt(it.second, eh.first)))
+                                                }
                                             }
                                         }
                                     }
@@ -545,7 +549,7 @@ fun EditorScreen(plan: Plan, onSave: (Plan) -> Unit, onBack: () -> Unit) {
                                                         putFloor(
                                                             gi,
                                                             snapFloor.copy(
-                                                                rooms = movePoints(snapFloor.rooms, chainPoints(chain), nx * ns, ny * ns, only, shellFixed),
+                                                                rooms = movePoints(snapFloor.rooms, chainPoints(chain), nx * ns, ny * ns, only, shellFixed && !outerEdge),
                                                                 els = shiftOpenings(snapFloor.els, chain, nx * ns, ny * ns)
                                                             )
                                                         )
