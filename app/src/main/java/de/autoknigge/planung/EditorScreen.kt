@@ -84,6 +84,7 @@ fun EditorScreen(plan: Plan, onSave: (Plan) -> Unit, onBack: () -> Unit) {
     var selId by remember { mutableStateOf<String?>(null) }
     var selVert by remember { mutableStateOf<Pt?>(null) }
     var linked by remember { mutableStateOf(true) }
+    var shellFixed by remember { mutableStateOf(true) }
     var scale by remember { mutableStateOf(40f * density) }
     var origin by remember { mutableStateOf(Offset.Zero) }
     var viewSize by remember { mutableStateOf(IntSize.Zero) }
@@ -103,7 +104,7 @@ fun EditorScreen(plan: Plan, onSave: (Plan) -> Unit, onBack: () -> Unit) {
     var cornerDlg by remember { mutableStateOf(false) }
     var showView by remember { mutableStateOf(false) }
     var placeKind by remember { mutableStateOf<Kind?>(null) }
-    // 0 keins, 1 Punkt einfügen, 2 Anbau, 3 Raum zeichnen, 4 Zusammenlegen
+    // 0 keins, 1 Punkt einfügen, 2 Anbau, 3 Raum zeichnen, 4 Zusammenlegen, 5 Haus verschieben
     var tool by remember { mutableStateOf(0) }
     var pending by remember { mutableStateOf<List<Pt>>(emptyList()) }
     val undo = remember { mutableStateListOf<Plan>() }
@@ -415,6 +416,7 @@ fun EditorScreen(plan: Plan, onSave: (Plan) -> Unit, onBack: () -> Unit) {
                             var chain: List<Pair<Pt, Pt>> = emptyList()
                             val cur = snapFloor.els.firstOrNull { it.id == selId }
                             val busy = tool != 0 || placeKind != null
+                            if (tool == 5) mode = 6
                             if (!busy) {
                                 if (cur != null && (cur.kind == Kind.FURN || cur.kind == Kind.STAIR) && handleHit(cur, start)) {
                                     mode = 2; targetId = cur.id; rawW = cur.w; rawH = cur.h
@@ -465,6 +467,12 @@ fun EditorScreen(plan: Plan, onSave: (Plan) -> Unit, onBack: () -> Unit) {
                                             val st = if (snapOn) 0.05 else 0.01
                                             when (mode) {
                                                 0 -> origin = Offset(origin.x + step.x, origin.y + step.y)
+                                                6 -> {
+                                                    if (!pushed) { pushUndo(); pushed = true }
+                                                    rawX += (step.x / scale).toDouble()
+                                                    rawY += (step.y / scale).toDouble()
+                                                    p = translatePlan(snapPlan, snapTo(rawX, st), snapTo(rawY, st))
+                                                }
                                                 1 -> {
                                                     if (!pushed) { pushUndo(); pushed = true }
                                                     rawX += (step.x / scale).toDouble()
@@ -513,8 +521,9 @@ fun EditorScreen(plan: Plan, onSave: (Plan) -> Unit, onBack: () -> Unit) {
                                                         rawY += (step.y / scale).toDouble()
                                                         val tgt = snapPoint(v.x + rawX, v.y + rawY, v)
                                                         val only = if (linked) null else selId
-                                                        putFloor(gi, snapFloor.copy(rooms = movePoints(snapFloor.rooms, listOf(v), tgt.x - v.x, tgt.y - v.y, only)))
-                                                        selVert = tgt
+                                                        putFloor(gi, snapFloor.copy(rooms = movePoints(snapFloor.rooms, listOf(v), tgt.x - v.x, tgt.y - v.y, only, shellFixed)))
+                                                        val dd = if (shellFixed) shellDelta(snapFloor.rooms, v, tgt.x - v.x, tgt.y - v.y) else Pair(tgt.x - v.x, tgt.y - v.y)
+                                                        selVert = Pt(v.x + dd.first, v.y + dd.second)
                                                     }
                                                 }
                                                 5 -> {
@@ -532,7 +541,7 @@ fun EditorScreen(plan: Plan, onSave: (Plan) -> Unit, onBack: () -> Unit) {
                                                         putFloor(
                                                             gi,
                                                             snapFloor.copy(
-                                                                rooms = movePoints(snapFloor.rooms, chainPoints(chain), nx * ns, ny * ns, only),
+                                                                rooms = movePoints(snapFloor.rooms, chainPoints(chain), nx * ns, ny * ns, only, shellFixed),
                                                                 els = shiftOpenings(snapFloor.els, chain, nx * ns, ny * ns)
                                                             )
                                                         )
@@ -547,7 +556,9 @@ fun EditorScreen(plan: Plan, onSave: (Plan) -> Unit, onBack: () -> Unit) {
                             if (!moved) {
                                 tapSelect(start)
                             } else if (pushed) {
-                                if (mode == 1) {
+                                if (mode == 6) {
+                                    // fertig beim nächsten Tippen auf "Fertig"
+                                } else if (mode == 1) {
                                     val f0 = p.floors[gi]
                                     val t = f0.els.firstOrNull { it.id == targetId }
                                     if (t != null && (t.kind == Kind.DOOR || t.kind == Kind.WINDOW)) {
@@ -572,7 +583,16 @@ fun EditorScreen(plan: Plan, onSave: (Plan) -> Unit, onBack: () -> Unit) {
             }
         }
 
-        if (tool == 3) {
+        if (tool == 5) {
+            Row(
+                Modifier.fillMaxWidth().background(Panel2).horizontalScroll(rememberScrollState()).padding(horizontal = 8.dp, vertical = 4.dp),
+                horizontalArrangement = Arrangement.spacedBy(6.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Text("Mit dem Finger ziehen: das ganze Haus wandert, die Größe bleibt gleich.", color = Ink, fontSize = 13.sp)
+                BarButton("Fertig") { resetTools() }
+            }
+        } else if (tool == 3) {
             Row(
                 Modifier.fillMaxWidth().background(Panel2).horizontalScroll(rememberScrollState()).padding(horizontal = 8.dp, vertical = 4.dp),
                 horizontalArrangement = Arrangement.spacedBy(6.dp),
@@ -708,6 +728,20 @@ fun EditorScreen(plan: Plan, onSave: (Plan) -> Unit, onBack: () -> Unit) {
             }
             BarButton("+ Treppe") { stairDlg = true }
             BarButton("+ Möbel") { furnDlg = true }
+            BarButton("Hülle: " + if (shellFixed) "fest" else "frei") {
+                shellFixed = !shellFixed
+                Toast.makeText(
+                    ctx,
+                    if (shellFixed) "Außenwand fest: Innenwände und Ecken lassen sich ändern, die Hülle bleibt stehen." else "Außenwand frei: auch die Hülle lässt sich ziehen.",
+                    Toast.LENGTH_LONG
+                ).show()
+            }
+            BarButton("Haus verschieben") {
+                resetTools()
+                tool = 5
+                selId = null
+                selVert = null
+            }
             BarButton("Haus") { houseDlg = true }
             BarButton("Dach") { roofDlg = true }
             BarButton("Ansicht") { showView = true }

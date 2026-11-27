@@ -292,12 +292,53 @@ fun chainPoints(chain: List<Pair<Pt, Pt>>): List<Pt> {
     return out
 }
 
-/** Verschiebt die genannten Eckpunkte in allen Räumen (oder nur in [only]). */
-fun movePoints(rooms: List<Room>, pts: List<Pt>, dx: Double, dy: Double, only: String?): List<Room> =
-    normalize(rooms.map { r ->
+/**
+ * Wie weit sich ein Eckpunkt bewegen darf, wenn die Außenwand fest bleibt: Ecken und Enden der Außenwand
+ * bleiben stehen, Punkte mitten auf einer geraden Außenwand gleiten nur an ihr entlang.
+ */
+fun shellDelta(rooms: List<Room>, q: Pt, dx: Double, dy: Double): Pair<Double, Double> {
+    val inc = uniqueEdges(rooms).filter { it.third == 1 && (samePt(it.first, q) || samePt(it.second, q)) }
+    if (inc.isEmpty()) return Pair(dx, dy)
+    if (inc.size == 2) {
+        val a = inc[0]
+        val b = inc[1]
+        val ax = a.second.x - a.first.x
+        val ay = a.second.y - a.first.y
+        val bx = b.second.x - b.first.x
+        val by = b.second.y - b.first.y
+        val la = hypot(ax, ay)
+        val lb = hypot(bx, by)
+        if (la > 1e-9 && lb > 1e-9 && abs(ax * by - ay * bx) / (la * lb) < 0.003) {
+            val ux = ax / la
+            val uy = ay / la
+            val s = dx * ux + dy * uy
+            return Pair(ux * s, uy * s)
+        }
+    }
+    return Pair(0.0, 0.0)
+}
+
+/** Verschiebt die genannten Eckpunkte in allen Räumen (oder nur in [only]). Mit [shell] bleibt die Außenwand fest. */
+fun movePoints(rooms: List<Room>, pts: List<Pt>, dx: Double, dy: Double, only: String?, shell: Boolean = false): List<Room> {
+    val deltas = pts.map { if (shell) shellDelta(rooms, it, dx, dy) else Pair(dx, dy) }
+    return normalize(rooms.map { r ->
         if (only != null && r.id != only) r
-        else r.copy(pts = r.pts.map { q -> if (pts.any { samePt(it, q) }) Pt(q.x + dx, q.y + dy) else q })
+        else r.copy(pts = r.pts.map { q ->
+            val i = pts.indexOfFirst { samePt(it, q) }
+            if (i >= 0) Pt(q.x + deltas[i].first, q.y + deltas[i].second) else q
+        })
     })
+}
+
+/** Das ganze Haus (alle Geschosse) verschieben. */
+fun translatePlan(p: Plan, dx: Double, dy: Double): Plan = p.copy(
+    floors = p.floors.map { f ->
+        f.copy(
+            rooms = f.rooms.map { r -> r.copy(pts = r.pts.map { Pt(it.x + dx, it.y + dy) }) },
+            els = f.els.map { it.copy(x = it.x + dx, y = it.y + dy) }
+        )
+    }
+)
 
 /** Türen und Fenster, die an den verschobenen Wänden sitzen, mitnehmen. */
 fun shiftOpenings(els: List<El>, chain: List<Pair<Pt, Pt>>, dx: Double, dy: Double): List<El> =
@@ -345,7 +386,8 @@ fun splitRoom(f: Floor, id: String, vertical: Boolean?): Floor? {
 private fun ccw(pts: List<Pt>): List<Pt> = if (signedArea(pts) < 0) pts.reversed() else pts
 
 /** Zwei Räume mit gemeinsamer Wand zu einem Raum vereinen (Name und Farbe von [a] bleiben). */
-fun mergeRooms(f: Floor, a: String, b: String): Floor? {
+fun mergeRooms(f0: Floor, a: String, b: String): Floor? {
+    val f = f0.copy(rooms = normalize(f0.rooms))
     val ra = f.rooms.firstOrNull { it.id == a } ?: return null
     val rb = f.rooms.firstOrNull { it.id == b } ?: return null
     val ea = mutableListOf<Pair<Pt, Pt>>()

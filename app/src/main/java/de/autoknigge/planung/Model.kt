@@ -305,7 +305,7 @@ object Store {
             }
         } catch (e: Exception) {
         }
-        return out
+        return out.map { pl -> pl.copy(floors = pl.floors.map { fl -> fl.copy(rooms = normalize(fl.rooms)) }) }.toMutableList()
     }
 
     fun toJson(plans: List<Plan>): String = toArray(plans).toString()
