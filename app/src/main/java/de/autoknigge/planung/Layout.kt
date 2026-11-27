@@ -399,35 +399,79 @@ fun weld(rooms: List<Room>, tol: Double): List<Room> {
     return normalize(w, tol)
 }
 
+/** Teile der Kante a0→a1, die von keiner gegenläufigen, fast deckungsgleichen Kante in [others] verdeckt sind. */
+private fun uncovered(a0: Pt, a1: Pt, others: List<Pair<Pt, Pt>>, tol: Double): Pair<List<Pair<Pt, Pt>>, Boolean> {
+    val len = hypot(a1.x - a0.x, a1.y - a0.y)
+    if (len < 1e-9) return Pair(emptyList(), false)
+    val ux = (a1.x - a0.x) / len
+    val uy = (a1.y - a0.y) / len
+    val cov = mutableListOf<Pair<Double, Double>>()
+    for ((b0, b1) in others) {
+        val d0 = abs((b0.x - a0.x) * uy - (b0.y - a0.y) * ux)
+        val d1 = abs((b1.x - a0.x) * uy - (b1.y - a0.y) * ux)
+        if (d0 > tol || d1 > tol) continue
+        val s0 = (b0.x - a0.x) * ux + (b0.y - a0.y) * uy
+        val s1 = (b1.x - a0.x) * ux + (b1.y - a0.y) * uy
+        if (s1 >= s0) continue // gleiche Richtung: keine gemeinsame Wand
+        val lo = max(0.0, s1)
+        val hi = min(len, s0)
+        if (hi - lo > 0.01) cov.add(Pair(lo, hi))
+    }
+    if (cov.isEmpty()) return Pair(listOf(Pair(a0, a1)), false)
+    cov.sortBy { it.first }
+    val out = mutableListOf<Pair<Pt, Pt>>()
+    var pos = 0.0
+    for ((lo, hi) in cov) {
+        if (lo - pos > 0.005) out.add(Pair(Pt(a0.x + ux * pos, a0.y + uy * pos), Pt(a0.x + ux * lo, a0.y + uy * lo)))
+        pos = max(pos, hi)
+    }
+    if (len - pos > 0.005) out.add(Pair(Pt(a0.x + ux * pos, a0.y + uy * pos), a1))
+    return Pair(out, true)
+}
+
 fun mergeRooms(f0: Floor, a: String, b: String): Floor? {
-    var f = f0.copy(rooms = normalize(f0.rooms))
-    f = f.copy(rooms = weld(f.rooms, 0.03))
+    val f = f0.copy(rooms = normalize(f0.rooms, 0.03))
     val ra = f.rooms.firstOrNull { it.id == a } ?: return null
     val rb = f.rooms.firstOrNull { it.id == b } ?: return null
-    val ea = mutableListOf<Pair<Pt, Pt>>()
-    val eb = mutableListOf<Pair<Pt, Pt>>()
     val pa = ccw(ra.pts)
     val pb = ccw(rb.pts)
-    for (i in pa.indices) ea.add(Pair(pa[i], pa[(i + 1) % pa.size]))
-    for (i in pb.indices) eb.add(Pair(pb[i], pb[(i + 1) % pb.size]))
-    val keepA = ea.filter { x -> eb.none { y -> samePt(x.first, y.second) && samePt(x.second, y.first) } }
-    val keepB = eb.filter { y -> ea.none { x -> samePt(x.first, y.second) && samePt(x.second, y.first) } }
-    if (keepA.size == ea.size) return null
-    val rest = (keepA + keepB).toMutableList()
-    if (rest.size < 3) return null
+    val ea = pa.indices.map { Pair(pa[it], pa[(it + 1) % pa.size]) }
+    val eb = pb.indices.map { Pair(pb[it], pb[(it + 1) % pb.size]) }
+    val tol = 0.03
+    var shared = false
+    val rest = mutableListOf<Pair<Pt, Pt>>()
+    for ((p0, p1) in ea) {
+        val (pieces, hit) = uncovered(p0, p1, eb, tol)
+        if (hit) shared = true
+        rest.addAll(pieces)
+    }
+    for ((p0, p1) in eb) {
+        val (pieces, hit) = uncovered(p0, p1, ea, tol)
+        if (hit) shared = true
+        rest.addAll(pieces)
+    }
+    if (!shared || rest.size < 3) return null
+    val join = 0.045
+    fun near(p: Pt, q: Pt): Double = hypot(p.x - q.x, p.y - q.y)
     val loop = mutableListOf<Pt>()
     var cur = rest.removeAt(0)
     loop.add(cur.first)
-    while (true) {
-        val idx = rest.indexOfFirst { samePt(it.first, cur.second) }
-        if (idx < 0) break
-        cur = rest.removeAt(idx)
+    while (rest.isNotEmpty()) {
+        var best = -1
+        var bd = join
+        for (i in rest.indices) {
+            val d = near(rest[i].first, cur.second)
+            if (d <= bd) { bd = d; best = i }
+        }
+        if (best < 0) break
+        cur = rest.removeAt(best)
         loop.add(cur.first)
     }
-    if (rest.isNotEmpty() || !samePt(cur.second, loop[0])) return null
+    if (rest.isNotEmpty() || near(cur.second, loop[0]) > join || loop.size < 3) return null
+    if (polyArea(loop) < MIN_AREA) return null
     val merged = ra.copy(pts = loop)
     val rooms = f.rooms.filter { it.id != b }.map { if (it.id == a) merged else it }
-    return f.copy(rooms = normalize(rooms))
+    return f.copy(rooms = normalize(rooms, 0.03))
 }
 
 fun deleteRoom(f: Floor, id: String): Floor? = if (f.rooms.size < 2) null else f.copy(rooms = f.rooms.filter { it.id != id })
