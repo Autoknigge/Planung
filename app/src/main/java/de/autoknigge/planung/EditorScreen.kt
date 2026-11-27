@@ -99,6 +99,7 @@ fun EditorScreen(plan: Plan, onSave: (Plan) -> Unit, onBack: () -> Unit) {
     var renameDlg by remember { mutableStateOf(false) }
     var houseDlg by remember { mutableStateOf(!plan.setup) }
     var roofDlg by remember { mutableStateOf(false) }
+    var statDlg by remember { mutableStateOf(false) }
     var floorDlg by remember { mutableStateOf(false) }
     var addFloorDlg by remember { mutableStateOf(false) }
     var cornerDlg by remember { mutableStateOf(false) }
@@ -744,6 +745,7 @@ fun EditorScreen(plan: Plan, onSave: (Plan) -> Unit, onBack: () -> Unit) {
             }
             BarButton("Haus") { houseDlg = true }
             BarButton("Dach") { roofDlg = true }
+            BarButton("Auswertung") { statDlg = true }
             BarButton("Ansicht") { showView = true }
         }
     }
@@ -881,6 +883,43 @@ fun EditorScreen(plan: Plan, onSave: (Plan) -> Unit, onBack: () -> Unit) {
         )
     }
 
+    if (statDlg) {
+        AlertDialog(
+            onDismissRequest = { statDlg = false },
+            confirmButton = { TextButton(onClick = { statDlg = false }) { Text("Schließen") } },
+            title = { Text("Auswertung") },
+            text = {
+                Column(Modifier.verticalScroll(rememberScrollState())) {
+                    var tNet = 0.0; var tGross = 0.0; var tVol = 0.0; var tShell = 0.0; var tIn = 0.0; var tOut = 0.0
+                    for (f in p.floors) {
+                        val s = floorStats(p, f)
+                        tNet += s.net; tGross += s.gross; tVol += s.roomVol; tShell += s.shellVol; tIn += s.innerWall; tOut += s.outerWall
+                        Text(f.name + " (Raumhöhe " + fmtM(f.height) + " m)", fontWeight = FontWeight.Bold, color = Ink)
+                        Text(
+                            "Wohnfläche (Wände abgezogen): " + fmtArea(s.net) + "\n" +
+                                "Wandgrundfläche: " + fmtArea(s.walls) + "\n" +
+                                "Brutto-Grundfläche: " + fmtArea(s.gross) + "\n" +
+                                "Raumvolumen innen: " + fmtM(s.roomVol) + " m³\n" +
+                                "Umbauter Raum: " + fmtM(s.shellVol) + " m³\n" +
+                                "Wandfläche in den Räumen: " + fmtArea(s.innerWall) + "\n" +
+                                "Außenwandfläche: " + fmtArea(s.outerWall) + "\n" +
+                                "Türen/Fenster abgezogen: " + fmtArea(s.openings),
+                            color = Ink, fontSize = 13.sp
+                        )
+                        Spacer(Modifier.size(10.dp))
+                    }
+                    Text("Gesamt", fontWeight = FontWeight.Bold, color = Ink)
+                    Text(
+                        "Wohnfläche: " + fmtArea(tNet) + "\nBrutto-Grundfläche: " + fmtArea(tGross) + "\nRaumvolumen innen: " + fmtM(tVol) + " m³\n" +
+                            "Umbauter Raum: " + fmtM(tShell) + " m³\nWandfläche in den Räumen: " + fmtArea(tIn) + "\nAußenwandfläche: " + fmtArea(tOut),
+                        color = Ink, fontSize = 13.sp
+                    )
+                    Spacer(Modifier.size(8.dp))
+                    Text("Umbauter Raum = Brutto-Grundfläche × (Raumhöhe + 25 cm Decke), Näherung. Wandfläche in den Räumen = Raumumfang × Höhe, ohne Türen und Fenster. Keine Bauzeichnung.", color = Muted, fontSize = 11.sp)
+                }
+            }
+        )
+    }
     if (houseDlg) {
         val f0 = fl()
         val initial = !plan.setup && !p.setup

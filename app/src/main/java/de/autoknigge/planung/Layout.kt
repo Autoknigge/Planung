@@ -548,3 +548,45 @@ fun resizeHouse(p: Plan, w: Double, d: Double, outerT: Double, innerT: Double): 
 
 /** Anzahl Treppenstufen für ein Geschoss. */
 fun stairSteps(f: Floor): Int = max(3, ((f.height + SLAB) / 0.18).roundToInt())
+
+/** Kennzahlen eines Geschosses (Wände abgezogen). */
+data class FloorStats(
+    val net: Double,        // Wohnfläche (lichte Räume)
+    val walls: Double,      // Grundfläche der Wände
+    val gross: Double,      // Brutto-Grundfläche
+    val roomVol: Double,    // Raumvolumen (lichte Höhe)
+    val shellVol: Double,   // umbauter Raum (Brutto × (Höhe + Decke))
+    val innerWall: Double,  // Wandfläche in den Räumen, ohne Türen/Fenster
+    val outerWall: Double,  // Außenwandfläche ohne Fenster
+    val openings: Double
+)
+
+fun floorStats(p: Plan, f: Floor): FloorStats {
+    val nets = f.rooms.map { roomNet(p, f, it) }
+    val net = nets.sumOf { it.area }
+    val wallArea = wallSegs(p, f).sumOf { hypot(it.x1 - it.x0, it.y1 - it.y0) * it.t }
+    val gross = net + wallArea
+    var perim = 0.0
+    f.rooms.forEachIndexed { i, r ->
+        val n = nets[i]
+        perim += if (n.w != null && n.d != null) 2 * (n.w + n.d) else {
+            var s = 0.0
+            for (k in r.pts.indices) {
+                val a = r.pts[k]; val b = r.pts[(k + 1) % r.pts.size]
+                s += hypot(b.x - a.x, b.y - a.y)
+            }
+            s
+        }
+    }
+    val outerLen = uniqueEdges(f.rooms).filter { it.third == 1 }.sumOf { hypot(it.second.x - it.first.x, it.second.y - it.first.y) }
+    var open = 0.0
+    var win = 0.0
+    for (e in f.els) {
+        if (e.kind == Kind.DOOR) open += e.w * (if (e.vh > 0) e.vh else 2.0)
+        if (e.kind == Kind.WINDOW) { val a = e.w * (if (e.vh > 0) e.vh else 1.2); open += a; win += a }
+    }
+    return FloorStats(
+        net, wallArea, gross, net * f.height, gross * (f.height + SLAB),
+        max(0.0, perim * f.height - open), max(0.0, outerLen * f.height - win), open
+    )
+}
