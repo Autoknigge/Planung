@@ -429,7 +429,7 @@ private fun uncovered(a0: Pt, a1: Pt, others: List<Pair<Pt, Pt>>, tol: Double): 
     return Pair(out, true)
 }
 
-fun mergeRooms(f0: Floor, a: String, b: String): Floor? {
+private fun mergeShared(f0: Floor, a: String, b: String, tol: Double): Floor? {
     val f = f0.copy(rooms = normalize(f0.rooms, 0.03))
     val ra = f.rooms.firstOrNull { it.id == a } ?: return null
     val rb = f.rooms.firstOrNull { it.id == b } ?: return null
@@ -437,7 +437,6 @@ fun mergeRooms(f0: Floor, a: String, b: String): Floor? {
     val pb = ccw(rb.pts)
     val ea = pa.indices.map { Pair(pa[it], pa[(it + 1) % pa.size]) }
     val eb = pb.indices.map { Pair(pb[it], pb[(it + 1) % pb.size]) }
-    val tol = 0.03
     var shared = false
     val rest = mutableListOf<Pair<Pt, Pt>>()
     for ((p0, p1) in ea) {
@@ -451,7 +450,7 @@ fun mergeRooms(f0: Floor, a: String, b: String): Floor? {
         rest.addAll(pieces)
     }
     if (!shared || rest.size < 3) return null
-    val join = 0.045
+    val join = max(0.045, tol * 1.5)
     fun near(p: Pt, q: Pt): Double = hypot(p.x - q.x, p.y - q.y)
     val loop = mutableListOf<Pt>()
     var cur = rest.removeAt(0)
@@ -647,4 +646,130 @@ fun floorStats(p: Plan, f: Floor): FloorStats {
         net, wallArea, gross, net * f.height, gross * (f.height + SLAB),
         max(0.0, perim * f.height - open), max(0.0, outerLen * f.height - win), open
     )
+}
+
+/** Hinweis zum letzten Zusammenlegen (null = ganz normal). */
+var mergeNote: String? = null
+
+private fun cross(ax: Double, ay: Double, bx: Double, by: Double) = ax * by - ay * bx
+
+private fun interT(a: Pt, b: Pt, c: Pt, d: Pt): Double? {
+    val rx = b.x - a.x; val ry = b.y - a.y
+    val sx = d.x - c.x; val sy = d.y - c.y
+    val den = cross(rx, ry, sx, sy)
+    if (abs(den) < 1e-12) return null
+    val t = cross(c.x - a.x, c.y - a.y, sx, sy) / den
+    val u = cross(c.x - a.x, c.y - a.y, rx, ry) / den
+    return if (t > 1e-9 && t < 1 - 1e-9 && u >= -1e-9 && u <= 1 + 1e-9) t else null
+}
+
+private fun splitEdges(poly: List<Pt>, other: List<Pt>): List<Pair<Pt, Pt>> {
+    val res = mutableListOf<Pair<Pt, Pt>>()
+    val n = poly.size
+    val m = other.size
+    for (i in 0 until n) {
+        val a = poly[i]
+        val b = poly[(i + 1) % n]
+        val ts = mutableListOf(0.0, 1.0)
+        for (j in 0 until m) interT(a, b, other[j], other[(j + 1) % m])?.let { ts.add(it) }
+        for (v in other) {
+            val (dd, t) = segProj(v.x, v.y, a.x, a.y, b.x, b.y)
+            if (dd < 0.01 && t > 1e-6 && t < 1 - 1e-6) ts.add(t)
+        }
+        ts.sort()
+        for (k in 0 until ts.size - 1) {
+            val p = Pt(a.x + (b.x - a.x) * ts[k], a.y + (b.y - a.y) * ts[k])
+            val q = Pt(a.x + (b.x - a.x) * ts[k + 1], a.y + (b.y - a.y) * ts[k + 1])
+            if (hypot(q.x - p.x, q.y - p.y) > 0.005) res.add(Pair(p, q))
+        }
+    }
+    return res
+}
+
+/** 0 = nicht auf dem Rand, 1 = auf dem Rand in gleicher Richtung, -1 = auf dem Rand gegenläufig. */
+private fun boundaryDir(poly: List<Pt>, mid: Pt, dx: Double, dy: Double): Int {
+    val n = poly.size
+    for (i in 0 until n) {
+        val a = poly[i]
+        val b = poly[(i + 1) % n]
+        val (dd, t) = segProj(mid.x, mid.y, a.x, a.y, b.x, b.y)
+        if (dd < 0.01 && t > -1e-6 && t < 1 + 1e-6) {
+            return if ((b.x - a.x) * dx + (b.y - a.y) * dy >= 0) 1 else -1
+        }
+    }
+    return 0
+}
+
+/** Vereinigung zweier sich überlappender oder berührender Vielecke; null, wenn kein zusammenhängender Umriss entsteht. */
+private fun unionPoly(pa: List<Pt>, pb: List<Pt>): List<Pt>? {
+    val ea = splitEdges(pa, pb)
+    val eb = splitEdges(pb, pa)
+    val keep = mutableListOf<Pair<Pt, Pt>>()
+    for ((p, q) in ea) {
+        val mid = Pt((p.x + q.x) / 2, (p.y + q.y) / 2)
+        val bd = boundaryDir(pb, mid, q.x - p.x, q.y - p.y)
+        if (bd == 1 || (bd == 0 && !pointIn(pb, mid.x, mid.y))) keep.add(Pair(p, q))
+    }
+    for ((p, q) in eb) {
+        val mid = Pt((p.x + q.x) / 2, (p.y + q.y) / 2)
+        val ad = boundaryDir(pa, mid, q.x - p.x, q.y - p.y)
+        if (ad == 0 && !pointIn(pa, mid.x, mid.y)) keep.add(Pair(p, q))
+    }
+    if (keep.size < 3) return null
+    val join = 0.02
+    val loops = mutableListOf<List<Pt>>()
+    val rest = keep.toMutableList()
+    while (rest.isNotEmpty()) {
+        var cur = rest.removeAt(0)
+        val loop = mutableListOf(cur.first)
+        while (true) {
+            if (hypot(cur.second.x - loop[0].x, cur.second.y - loop[0].y) <= join) break
+            var best = -1
+            var bd = join
+            for (i in rest.indices) {
+                val d = hypot(rest[i].first.x - cur.second.x, rest[i].first.y - cur.second.y)
+                if (d <= bd) { bd = d; best = i }
+            }
+            if (best < 0) return null
+            cur = rest.removeAt(best)
+            loop.add(cur.first)
+        }
+        if (loop.size >= 3) loops.add(loop)
+    }
+    val outer = loops.filter { signedArea(it) > 0 && polyArea(it) >= MIN_AREA }
+    return if (outer.size == 1) outer[0] else null
+}
+
+private fun hull(pts: List<Pt>): List<Pt> {
+    val s = pts.sortedWith(compareBy({ it.x }, { it.y }))
+    fun half(list: List<Pt>): List<Pt> {
+        val h = mutableListOf<Pt>()
+        for (p in list) {
+            while (h.size >= 2 && cross(h[h.size - 1].x - h[h.size - 2].x, h[h.size - 1].y - h[h.size - 2].y, p.x - h[h.size - 2].x, p.y - h[h.size - 2].y) <= 0) h.removeAt(h.size - 1)
+            h.add(p)
+        }
+        h.removeAt(h.size - 1)
+        return h
+    }
+    return half(s) + half(s.reversed())
+}
+
+/** Zwei Räume zusammenlegen – klappt auch bei kleinen Lücken, Überlappungen und schiefen Wänden. */
+fun mergeRooms(f0: Floor, a: String, b: String): Floor? {
+    mergeNote = null
+    val f = f0.copy(rooms = normalize(f0.rooms, 0.03))
+    val ra = f.rooms.firstOrNull { it.id == a } ?: return null
+    val rb = f.rooms.firstOrNull { it.id == b } ?: return null
+    mergeShared(f0, a, b, 0.03)?.let { return it }
+    val u = unionPoly(ccw(ra.pts), ccw(rb.pts))
+    var loop: List<Pt>? = u
+    if (loop == null) {
+        for (t in listOf(0.15, 0.35)) mergeShared(f0, a, b, t)?.let { return it }
+        loop = hull(ra.pts + rb.pts)
+        mergeNote = "Die Räume berührten sich nicht genau, der Umriss wurde verbunden. Bitte Ecken prüfen."
+    }
+    if (loop.size < 3) return null
+    val merged = ra.copy(pts = loop)
+    val rooms = f.rooms.filter { it.id != b }.map { if (it.id == a) merged else it }
+    return f.copy(rooms = normalize(rooms, 0.03))
 }

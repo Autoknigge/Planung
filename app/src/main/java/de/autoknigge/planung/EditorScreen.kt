@@ -286,7 +286,10 @@ fun EditorScreen(plan: Plan, onSave: (Plan) -> Unit, onBack: () -> Unit) {
                 if (src != null && other != null && other.id != src) {
                     val nf = mergeRooms(f, src, other.id)
                     if (nf == null) Toast.makeText(ctx, "Die Räume haben keine gemeinsame Wand.", Toast.LENGTH_LONG).show()
-                    else { pushUndo(); putFloor(fiIdx(), nf) }
+                    else {
+                        pushUndo(); putFloor(fiIdx(), nf)
+                        mergeNote?.let { Toast.makeText(ctx, it, Toast.LENGTH_LONG).show() }
+                    }
                 }
                 return
             }
