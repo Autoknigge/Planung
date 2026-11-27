@@ -799,9 +799,11 @@ fun simplifyRoom(all: List<Room>, id: String): List<Room> = all.map { r ->
                 val la = hypot(v.x - a.x, v.y - a.y)
                 val lb = hypot(b.x - v.x, b.y - v.y)
                 if (la < 1e-9 || lb < 1e-9) continue
-                val sinA = abs(cross(v.x - a.x, v.y - a.y, b.x - v.x, b.y - v.y)) / (la * lb)
+                val lab = hypot(b.x - a.x, b.y - a.y)
+                if (lab < 1e-9) continue
+                val dev = abs(cross(b.x - a.x, b.y - a.y, v.x - a.x, v.y - a.y)) / lab
                 val dot = (v.x - a.x) * (b.x - v.x) + (v.y - a.y) * (b.y - v.y)
-                if (sinA < 0.003 && dot > 0 && others.none { samePt(it, v) }) {
+                if (dev < 0.03 && dot > 0 && others.none { samePt(it, v) }) {
                     pts = pts.filterIndexed { k, _ -> k != i }
                     changed = true
                     break
@@ -810,4 +812,10 @@ fun simplifyRoom(all: List<Room>, id: String): List<Room> = all.map { r ->
         }
         r.copy(pts = pts)
     }
+}
+
+fun simplifyAll(rooms: List<Room>): List<Room> {
+    var cur = rooms
+    for (r in rooms) cur = simplifyRoom(cur, r.id)
+    return cur
 }
