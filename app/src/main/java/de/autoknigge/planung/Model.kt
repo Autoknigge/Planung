@@ -77,7 +77,11 @@ data class Plan(
     val innerT: Double = 0.15,
     val roof: RoofType = RoofType.GABLE,
     val pitch: Double = 35.0,
-    val overhang: Double = 0.5,
+    /** Dachüberstand je Seite (Nord = oben im Plan, Süd = vorne). */
+    val ovN: Double = 0.5,
+    val ovE: Double = 0.5,
+    val ovS: Double = 0.5,
+    val ovW: Double = 0.5,
     /** First parallel zur Breite (x-Richtung) bei Sattel- und Pultdach. */
     val ridgeX: Boolean = true,
     val floors: List<Floor> = defaultFloors(10.0, 8.0, outerT),
@@ -280,7 +284,10 @@ object Store {
                             innerT = o.optDouble("innerT", 0.15),
                             roof = enumOr(o.optString("roof", "GABLE"), RoofType.GABLE),
                             pitch = o.optDouble("pitch", 35.0),
-                            overhang = o.optDouble("overhang", 0.5),
+                            ovN = o.optDouble("ovN", o.optDouble("overhang", 0.5)),
+                            ovE = o.optDouble("ovE", o.optDouble("overhang", 0.5)),
+                            ovS = o.optDouble("ovS", o.optDouble("overhang", 0.5)),
+                            ovW = o.optDouble("ovW", o.optDouble("overhang", 0.5)),
                             ridgeX = o.optBoolean("ridgeX", true),
                             floors = floors,
                             setup = o.optBoolean("setup", true),
@@ -322,7 +329,10 @@ object Store {
                 o.put("innerT", p.innerT)
                 o.put("roof", p.roof.name)
                 o.put("pitch", p.pitch)
-                o.put("overhang", p.overhang)
+                o.put("ovN", p.ovN)
+                o.put("ovE", p.ovE)
+                o.put("ovS", p.ovS)
+                o.put("ovW", p.ovW)
                 o.put("ridgeX", p.ridgeX)
                 o.put("setup", p.setup)
                 val fa = JSONArray()

@@ -118,6 +118,50 @@ private fun DrawScope.drawOuterDims(p: Plan, f: Floor, t: Tf, font: Float, line:
     dimLine(Offset(t.x(fx0 - o2), t.y(fy1)), Offset(t.x(fx0 - o2), t.y(fy0)), fmtM(fy1 - fy0), font, line)
 }
 
+/** Stelle im Raum, an der die Beschriftung nicht von Möbeln oder Treppen verdeckt wird (möglichst nah an der Mitte). */
+private fun labelSpot(r: Room, els: List<El>, wm: Double, hm: Double): Pt {
+    val c = centroid(r.pts)
+    val obst = els.filter { it.kind == Kind.FURN || it.kind == Kind.STAIR }.map { e ->
+        var x0 = Double.MAX_VALUE
+        var y0 = Double.MAX_VALUE
+        var x1 = -Double.MAX_VALUE
+        var y1 = -Double.MAX_VALUE
+        for (sx in listOf(-1.0, 1.0)) for (sy in listOf(-1.0, 1.0)) {
+            val (vx, vy) = toWorldVec(e, sx * e.w / 2, sy * e.h / 2)
+            x0 = min(x0, e.x + vx); x1 = max(x1, e.x + vx)
+            y0 = min(y0, e.y + vy); y1 = max(y1, e.y + vy)
+        }
+        doubleArrayOf(x0, y0, x1, y1)
+    }
+    if (obst.isEmpty()) return c
+    fun free(x: Double, y: Double): Boolean {
+        val l = x - wm / 2
+        val rr = x + wm / 2
+        val tp = y - hm / 2
+        val b = y + hm / 2
+        for (q in listOf(Pair(l, tp), Pair(rr, tp), Pair(l, b), Pair(rr, b), Pair(x, y))) if (!pointIn(r.pts, q.first, q.second)) return false
+        return obst.none { l < it[2] && rr > it[0] && tp < it[3] && b > it[1] }
+    }
+    if (free(c.x, c.y)) return c
+    val x0 = r.pts.minOf { it.x }
+    val x1 = r.pts.maxOf { it.x }
+    val y0 = r.pts.minOf { it.y }
+    val y1 = r.pts.maxOf { it.y }
+    var best: Pt? = null
+    var bd = Double.MAX_VALUE
+    var x = x0
+    while (x <= x1) {
+        var y = y0
+        while (y <= y1) {
+            val dd = (x - c.x) * (x - c.x) + (y - c.y) * (y - c.y)
+            if (dd < bd && free(x, y)) { bd = dd; best = Pt(x, y) }
+            y += 0.2
+        }
+        x += 0.2
+    }
+    return best ?: c
+}
+
 private fun DrawScope.pathOf(t: Tf, pts: List<Pt>): Path {
     val path = Path()
     pts.forEachIndexed { i, q -> if (i == 0) path.moveTo(t.x(q.x), t.y(q.y)) else path.lineTo(t.x(q.x), t.y(q.y)) }
@@ -224,13 +268,14 @@ fun DrawScope.drawFloor(
 
     // Raumbeschriftung
     for (r in f.rooms) {
-        val c = centroid(r.pts)
-        val cx = t.x(c.x)
-        val cy = t.y(c.y)
         val bw = t.s(r.pts.maxOf { it.x } - r.pts.minOf { it.x })
         val bh = t.s(r.pts.maxOf { it.y } - r.pts.minOf { it.y })
         val net = roomNet(p, f, r)
         val title = if (r.name.isBlank()) "Raum" else r.name
+        val wMeters = (maxOf(paint(font * 1.1f, 0, true).measureText(title), paint(font, 0, false).measureText(fmtArea(net.area))).coerceAtMost(bw * 0.8f) / scale).toDouble()
+        val spot = labelSpot(r, f.els, wMeters + 0.2, (font * (if (roomDims && net.w != null) 3.8f else 2.8f) / scale).toDouble())
+        val cx = t.x(spot.x)
+        val cy = t.y(spot.y)
         if (bw > font * 3 && bh > font * 2.5f) {
             nc.drawText(title, cx, cy - font * 0.1f, fitted(title, font * 1.1f, bw * 0.8f, InkColor.toArgb(), true))
             val a = fmtArea(net.area)
@@ -303,8 +348,10 @@ fun DrawScope.drawFloor(
                     nc.restore()
                 }
                 nc.restore()
-                drawCircle(SelectColor, font * 0.85f, Offset(wp / 2, hp / 2))
-                drawCircle(Color(0xFF3F3F3F), font * 0.85f, Offset(wp / 2, hp / 2), style = Stroke(line))
+                if (e.kind == Kind.FURN || e.kind == Kind.STAIR) {
+                    drawCircle(SelectColor, font * 0.85f, Offset(wp / 2, hp / 2))
+                    drawCircle(Color(0xFF3F3F3F), font * 0.85f, Offset(wp / 2, hp / 2), style = Stroke(line))
+                }
             }
         }
         if (e.kind == Kind.FURN && e.name.isNotBlank() && min(wp, hp) > font * 1.2f) {
@@ -425,38 +472,43 @@ fun roofRise(p: Plan): Double {
     }
 }
 
-/** Dachumriss in Metern: u von links nach rechts, z über Oberkante der Wände. */
+/** Überstände für eine Ansicht: links, rechts (im Bild) und zur Tiefe hin. */
+private fun ovFor(p: Plan, side: Int): Triple<Double, Double, Double> = when (side) {
+    0 -> Triple(p.ovW, p.ovE, max(p.ovN, p.ovS))
+    1 -> Triple(p.ovS, p.ovN, max(p.ovE, p.ovW))
+    2 -> Triple(p.ovE, p.ovW, max(p.ovN, p.ovS))
+    else -> Triple(p.ovN, p.ovS, max(p.ovE, p.ovW))
+}
+
+/** Seite des Hauses (Ansicht), auf der das Pultdach hoch ist. */
+private fun shedHighSide(p: Plan): Int = if (p.ridgeX) 2 else 3
+
+/** Dachfläche in Metern: u von links nach rechts, z über Oberkante der Wände. Leer, wenn das Dach nur als Platte auf einer Wand gezeichnet wird. */
 private fun roofPoly(p: Plan, side: Int): List<Pair<Double, Double>> {
     val lv = if (side % 2 == 0) p.w else p.d
     val ld = if (side % 2 == 0) p.d else p.w
-    val o = p.overhang
+    val (oL, oR, oD) = ovFor(p, side)
     val tn = tan(Math.toRadians(p.pitch))
-    val e = o * tn
+    val eL = oL * tn
+    val eR = oR * tn
+    val eD = oD * tn
     val ridgeAlong = if (side % 2 == 0) p.ridgeX else !p.ridgeX
     return when (p.roof) {
-        RoofType.FLAT -> listOf(-o to 0.0, lv + o to 0.0, lv + o to 0.3, -o to 0.3)
-        RoofType.GABLE -> {
-            if (ridgeAlong) {
-                val rise = ld / 2 * tn
-                listOf(-o to -e, lv + o to -e, lv + o to rise, -o to rise)
-            } else {
-                listOf(-o to -e, lv / 2 to lv / 2 * tn, lv + o to -e)
-            }
-        }
+        RoofType.FLAT -> listOf(-oL to 0.0, lv + oR to 0.0, lv + oR to 0.3, -oL to 0.3)
+        RoofType.GABLE -> if (ridgeAlong) {
+            val rise = ld / 2 * tn
+            listOf(-oL to -eD, lv + oR to -eD, lv + oR to rise, -oL to rise)
+        } else emptyList()
         RoofType.HIP -> {
             val rise = min(p.w, p.d) / 2 * tn
-            if (lv > ld + 0.01) listOf(-o to -e, lv + o to -e, lv - ld / 2 to rise, ld / 2 to rise)
-            else listOf(-o to -e, lv / 2 to rise, lv + o to -e)
+            if (lv > ld + 0.01) listOf(-oL to -eL, lv + oR to -eR, lv - ld / 2 to rise, ld / 2 to rise)
+            else listOf(-oL to -eL, lv / 2 to rise, lv + oR to -eR)
         }
-        RoofType.TENT -> listOf(-o to -e, lv / 2 to min(p.w, p.d) / 2 * tn, lv + o to -e)
+        RoofType.TENT -> listOf(-oL to -eL, lv / 2 to min(p.w, p.d) / 2 * tn, lv + oR to -eR)
         RoofType.SHED -> {
             val rise = (if (p.ridgeX) p.d else p.w) * tn
-            if (ridgeAlong) listOf(-o to -e, lv + o to -e, lv + o to rise, -o to rise)
-            else {
-                val highRight = if (p.ridgeX) side == 1 else side == 2
-                if (highRight) listOf(-o to -e, lv + o to rise, lv + o to -e)
-                else listOf(-o to rise, lv + o to -e, -o to -e)
-            }
+            if (ridgeAlong && side != shedHighSide(p)) listOf(-oL to -eD, lv + oR to -eD, lv + oR to rise, -oL to rise)
+            else emptyList()
         }
     }
 }
@@ -482,23 +534,24 @@ fun DrawScope.drawView(p: Plan, side: Int, font: Float) {
     z = 0.0
     for (i in base - 1 downTo 0) { z -= p.floors[i].height + SLAB; zb[i] = z }
     val minZ = if (base > 0) zb[0] - 0.2 else -0.6
-    val rise = roofPoly(p, side).maxOf { it.second }
-    val maxZ = wallTop + max(rise, 0.3)
-    val o = p.overhang
+    val rise = roofRise(p)
+    val tn = tan(Math.toRadians(p.pitch))
+    val (oL, oR, _) = ovFor(p, side)
+    val maxZ = wallTop + max(rise + max(oL, oR) * tn + 0.4, 0.5)
     val mLeft = font * 2.5f
     val mRight = font * 9f
     val mTop = font * 2f
     val mBottom = font * 3f
-    val spanX = lv + 2 * o + 1.0
+    val spanX = lv + oL + oR + 1.0
     val spanZ = maxZ - minZ
     val sc = min((size.width - mLeft - mRight) / spanX.toFloat(), (size.height - mTop - mBottom) / spanZ.toFloat())
-    val ox = mLeft + (o + 0.5).toFloat() * sc
+    val ox = mLeft + (oL + 0.5).toFloat() * sc
     val oy = mTop + (maxZ * sc).toFloat()
     fun px(u: Double) = ox + (u * sc).toFloat()
     fun pz(zz: Double) = oy - (zz * sc).toFloat()
 
     // Erde
-    drawRect(Color(0x33A27B4B), Offset(px(-o - 0.5), pz(0.0)), Size(((lv + 2 * o + 1.0) * sc).toFloat(), (-minZ * sc).toFloat()))
+    drawRect(Color(0x33A27B4B), Offset(px(-oL - 0.5), pz(0.0)), Size(((lv + oL + oR + 1.0) * sc).toFloat(), (-minZ * sc).toFloat()))
     // Geschosse
     for (i in 0 until n) {
         val f = p.floors[i]
@@ -508,7 +561,7 @@ fun DrawScope.drawView(p: Plan, side: Int, font: Float) {
         drawRect(Color(0xFF3F3F3F), Offset(px(0.0), pz(zb[i] + f.height + SLAB)), Size((lv * sc).toFloat(), (SLAB * sc).toFloat()), style = Stroke(line))
         // Beschriftung rechts
         val label = f.name + " · " + fmtM(f.height) + " m"
-        nc.drawText(label, px(lv + o) + font * 0.8f, pz(zb[i] + f.height / 2) + font * 0.3f, paint(font * 0.9f, 0xFF333333.toInt(), false, Paint.Align.LEFT))
+        nc.drawText(label, px(lv + oR) + font * 0.8f, pz(zb[i] + f.height / 2) + font * 0.3f, paint(font * 0.9f, 0xFF333333.toInt(), false, Paint.Align.LEFT))
     }
     val houseBottom = if (base > 0) zb[0] else 0.0
     drawRect(Color(0xFF3F3F3F), Offset(px(0.0), pz(wallTop)), Size((lv * sc).toFloat(), ((wallTop - houseBottom) * sc).toFloat()), style = Stroke(line * 1.4f))
@@ -538,24 +591,60 @@ fun DrawScope.drawView(p: Plan, side: Int, font: Float) {
         }
     }
     // Dach
-    val poly = roofPoly(p, side)
+    val ridgeAlongV = if (side % 2 == 0) p.ridgeX else !p.ridgeX
+    val wallC = Color(0xFFEDE6D6)
+    val roofC = Color(0xFFB5654A)
+    val roofLine = Color(0xFF6E3A28)
+    val slab = (0.28 * sc).toFloat()
+    fun slabLine(u0: Double, z0: Double, u1: Double, z1: Double) {
+        drawLine(roofC, Offset(px(u0), pz(wallTop + z0 + 0.14)), Offset(px(u1), pz(wallTop + z1 + 0.14)), slab)
+        drawLine(roofLine, Offset(px(u0), pz(wallTop + z0 + 0.28)), Offset(px(u1), pz(wallTop + z1 + 0.28)), line)
+    }
+    if (n > base) {
+        if (p.roof == RoofType.GABLE && !ridgeAlongV) {
+            val gp = Path()
+            gp.moveTo(px(0.0), pz(wallTop)); gp.lineTo(px(lv / 2), pz(wallTop + lv / 2 * tn)); gp.lineTo(px(lv), pz(wallTop)); gp.close()
+            drawPath(gp, wallC, style = Fill)
+            drawPath(gp, Color(0xFF3F3F3F), style = Stroke(line * 1.4f))
+            slabLine(-oL, -oL * tn, lv / 2, lv / 2 * tn)
+            slabLine(lv + oR, -oR * tn, lv / 2, lv / 2 * tn)
+        } else if (p.roof == RoofType.SHED && !ridgeAlongV) {
+            val highRight = if (p.ridgeX) side == 1 else side == 2
+            val wp = Path()
+            if (highRight) { wp.moveTo(px(0.0), pz(wallTop)); wp.lineTo(px(lv), pz(wallTop + lv * tn)); wp.lineTo(px(lv), pz(wallTop)) }
+            else { wp.moveTo(px(0.0), pz(wallTop)); wp.lineTo(px(0.0), pz(wallTop + lv * tn)); wp.lineTo(px(lv), pz(wallTop)) }
+            wp.close()
+            drawPath(wp, wallC, style = Fill)
+            drawPath(wp, Color(0xFF3F3F3F), style = Stroke(line * 1.4f))
+            if (highRight) slabLine(-oL, -oL * tn, lv + oR, (lv + oR) * tn)
+            else slabLine(-oL, (lv + oL) * tn, lv + oR, -oR * tn)
+        } else if (p.roof == RoofType.SHED && side == shedHighSide(p)) {
+            val hh = (if (p.ridgeX) p.d else p.w) * tn
+            drawRect(wallC, Offset(px(0.0), pz(wallTop + hh)), Size((lv * sc).toFloat(), (hh * sc).toFloat()))
+            drawRect(Color(0xFF3F3F3F), Offset(px(0.0), pz(wallTop + hh)), Size((lv * sc).toFloat(), (hh * sc).toFloat()), style = Stroke(line * 1.4f))
+            slabLine(-oL, hh, lv + oR, hh)
+        }
+    }
+    val poly = if (n > base) roofPoly(p, side) else emptyList()
     val path = Path()
     poly.forEachIndexed { k, q ->
         val x = px(q.first)
         val y = pz(wallTop + q.second)
         if (k == 0) path.moveTo(x, y) else path.lineTo(x, y)
     }
-    path.close()
-    drawPath(path, Color(0xFFB5654A), style = Fill)
-    drawPath(path, Color(0xFF6E3A28), style = Stroke(line * 1.4f))
+    if (poly.isNotEmpty()) {
+        path.close()
+        drawPath(path, roofC, style = Fill)
+        drawPath(path, roofLine, style = Stroke(line * 1.4f))
+    }
     // Gelände
-    drawLine(Color(0xFF4C7A3B), Offset(px(-o - 0.5), pz(0.0)), Offset(px(lv + o + 0.5), pz(0.0)), line * 2.2f)
+    drawLine(Color(0xFF4C7A3B), Offset(px(-oL - 0.5), pz(0.0)), Offset(px(lv + oR + 0.5), pz(0.0)), line * 2.2f)
     // Maße
     val eave = wallTop
     val ridge = wallTop + rise
     val cap = "Traufhöhe " + fmtM(eave) + " m · Firsthöhe " + fmtM(ridge) + " m · " + p.roof.label +
         (if (p.roof != RoofType.FLAT) " " + String.format(java.util.Locale.GERMANY, "%.0f", p.pitch) + "°" else "") +
-        " · Überstand " + fmtM(p.overhang) + " m"
+        " · Überstand V " + fmtM(p.ovS) + " / R " + fmtM(p.ovE) + " / H " + fmtM(p.ovN) + " / L " + fmtM(p.ovW) + " m"
     nc.drawText(cap, size.width / 2, size.height - font * 1.0f, fitted(cap, font * 1.0f, size.width - font * 2, 0xFF333333.toInt(), false))
     val lenTxt = fmtM(lv) + " m"
     nc.drawText(lenTxt, px(lv / 2), pz(minZ) + font * 1.0f, paint(font * 0.95f, DimColor.toArgb(), true))
@@ -564,18 +653,17 @@ fun DrawScope.drawView(p: Plan, side: Int, font: Float) {
 private fun DrawScope.drawRoofTop(p: Plan, font: Float) {
     val nc = drawContext.canvas.nativeCanvas
     val line = maxOf(1f, font * 0.12f)
-    val o = p.overhang
     val m = font * 3f
-    val spanX = p.w + 2 * o
-    val spanY = p.d + 2 * o
+    val spanX = p.w + p.ovW + p.ovE
+    val spanY = p.d + p.ovN + p.ovS
     val sc = min((size.width - 2 * m) / spanX.toFloat(), (size.height - 2 * m - font * 2) / spanY.toFloat())
-    val ox = (size.width - (spanX * sc).toFloat()) / 2 + (o * sc).toFloat()
-    val oy = m + (o * sc).toFloat()
+    val ox = (size.width - (spanX * sc).toFloat()) / 2 + (p.ovW * sc).toFloat()
+    val oy = m + (p.ovN * sc).toFloat()
     fun px(x: Double) = ox + (x * sc).toFloat()
     fun py(y: Double) = oy + (y * sc).toFloat()
     val roofC = Color(0xFFD99A82)
-    drawRect(roofC, Offset(px(-o), py(-o)), Size((spanX * sc).toFloat(), (spanY * sc).toFloat()))
-    drawRect(Color(0xFF6E3A28), Offset(px(-o), py(-o)), Size((spanX * sc).toFloat(), (spanY * sc).toFloat()), style = Stroke(line * 1.4f))
+    drawRect(roofC, Offset(px(-p.ovW), py(-p.ovN)), Size((spanX * sc).toFloat(), (spanY * sc).toFloat()))
+    drawRect(Color(0xFF6E3A28), Offset(px(-p.ovW), py(-p.ovN)), Size((spanX * sc).toFloat(), (spanY * sc).toFloat()), style = Stroke(line * 1.4f))
     drawRect(
         Color(0xFF3F3F3F), Offset(px(0.0), py(0.0)), Size((p.w * sc).toFloat(), (p.d * sc).toFloat()),
         style = Stroke(line, pathEffect = PathEffect.dashPathEffect(floatArrayOf(font, font * 0.6f)))
@@ -584,7 +672,7 @@ private fun DrawScope.drawRoofTop(p: Plan, font: Float) {
     fun ln(x0: Double, y0: Double, x1: Double, y1: Double) = drawLine(rc, Offset(px(x0), py(y0)), Offset(px(x1), py(y1)), line * 1.6f)
     when (p.roof) {
         RoofType.FLAT -> nc.drawText("Flachdach", px(p.w / 2), py(p.d / 2), paint(font * 1.2f, 0xFF4A2A1C.toInt(), true))
-        RoofType.GABLE -> if (p.ridgeX) ln(-o, p.d / 2, p.w + o, p.d / 2) else ln(p.w / 2, -o, p.w / 2, p.d + o)
+        RoofType.GABLE -> if (p.ridgeX) ln(-p.ovW, p.d / 2, p.w + p.ovE, p.d / 2) else ln(p.w / 2, -p.ovN, p.w / 2, p.d + p.ovS)
         RoofType.HIP -> {
             if (p.w >= p.d) {
                 val s = p.d / 2
@@ -609,6 +697,6 @@ private fun DrawScope.drawRoofTop(p: Plan, font: Float) {
             nc.drawText("Gefälle", (a.x + b.x) / 2, (a.y + b.y) / 2 - font * 0.6f, paint(font, 0xFF4A2A1C.toInt(), true))
         }
     }
-    val tw = fmtM(p.w + 2 * o) + " × " + fmtM(p.d + 2 * o) + " m (mit Überstand " + fmtM(o) + " m)"
+    val tw = fmtM(spanX) + " × " + fmtM(spanY) + " m mit Dachüberstand"
     nc.drawText(tw, size.width / 2, size.height - font * 1.0f, fitted(tw, font, size.width - font * 2, 0xFF333333.toInt(), false))
 }

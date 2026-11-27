@@ -416,7 +416,7 @@ fun EditorScreen(plan: Plan, onSave: (Plan) -> Unit, onBack: () -> Unit) {
                             val cur = snapFloor.els.firstOrNull { it.id == selId }
                             val busy = tool != 0 || placeKind != null
                             if (!busy) {
-                                if (cur != null && handleHit(cur, start)) {
+                                if (cur != null && (cur.kind == Kind.FURN || cur.kind == Kind.STAIR) && handleHit(cur, start)) {
                                     mode = 2; targetId = cur.id; rawW = cur.w; rawH = cur.h
                                 } else {
                                     val hit = hitEl(start)
@@ -904,7 +904,10 @@ fun EditorScreen(plan: Plan, onSave: (Plan) -> Unit, onBack: () -> Unit) {
     if (roofDlg) {
         var rt by remember { mutableStateOf(p.roof.ordinal) }
         var pitch by remember { mutableStateOf(String.format(Locale.GERMANY, "%.0f", p.pitch)) }
-        var ov by remember { mutableStateOf(fmtNum(p.overhang)) }
+        var ovS by remember { mutableStateOf(fmtNum(p.ovS)) }
+        var ovE by remember { mutableStateOf(fmtNum(p.ovE)) }
+        var ovN by remember { mutableStateOf(fmtNum(p.ovN)) }
+        var ovW by remember { mutableStateOf(fmtNum(p.ovW)) }
         var rx by remember { mutableStateOf(p.ridgeX) }
         val kb = KeyboardOptions(keyboardType = KeyboardType.Decimal)
         val type = RoofType.values()[rt]
@@ -920,7 +923,16 @@ fun EditorScreen(plan: Plan, onSave: (Plan) -> Unit, onBack: () -> Unit) {
                         OutlinedTextField(value = pitch, onValueChange = { pitch = it }, label = { Text("Dachneigung (Grad)") }, singleLine = true, keyboardOptions = kb)
                         Spacer(Modifier.size(8.dp))
                     }
-                    OutlinedTextField(value = ov, onValueChange = { ov = it }, label = { Text("Dachüberstand (m)") }, singleLine = true, keyboardOptions = kb)
+                    Text("Dachüberstand je Seite (m)", color = Muted, fontSize = 12.sp)
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        OutlinedTextField(value = ovS, onValueChange = { ovS = it }, label = { Text("Vorne") }, singleLine = true, keyboardOptions = kb, modifier = Modifier.weight(1f))
+                        OutlinedTextField(value = ovN, onValueChange = { ovN = it }, label = { Text("Hinten") }, singleLine = true, keyboardOptions = kb, modifier = Modifier.weight(1f))
+                    }
+                    Spacer(Modifier.size(8.dp))
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        OutlinedTextField(value = ovW, onValueChange = { ovW = it }, label = { Text("Links") }, singleLine = true, keyboardOptions = kb, modifier = Modifier.weight(1f))
+                        OutlinedTextField(value = ovE, onValueChange = { ovE = it }, label = { Text("Rechts") }, singleLine = true, keyboardOptions = kb, modifier = Modifier.weight(1f))
+                    }
                     if (type == RoofType.GABLE || type == RoofType.SHED) {
                         Spacer(Modifier.size(8.dp))
                         Text(if (type == RoofType.GABLE) "Firstrichtung" else "Hohe Seite (Pult)", color = Muted, fontSize = 12.sp)
@@ -937,7 +949,10 @@ fun EditorScreen(plan: Plan, onSave: (Plan) -> Unit, onBack: () -> Unit) {
                     p = p.copy(
                         roof = type,
                         pitch = (num(pitch) ?: p.pitch).coerceIn(5.0, 70.0),
-                        overhang = (num(ov) ?: p.overhang).coerceIn(0.0, 3.0),
+                        ovS = (num(ovS) ?: p.ovS).coerceIn(0.0, 3.0),
+                        ovN = (num(ovN) ?: p.ovN).coerceIn(0.0, 3.0),
+                        ovW = (num(ovW) ?: p.ovW).coerceIn(0.0, 3.0),
+                        ovE = (num(ovE) ?: p.ovE).coerceIn(0.0, 3.0),
                         ridgeX = rx
                     )
                     roofDlg = false
