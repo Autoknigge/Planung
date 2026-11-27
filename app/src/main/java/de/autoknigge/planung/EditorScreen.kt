@@ -79,7 +79,7 @@ private val DimHint = Color(0x66000000)
 fun EditorScreen(plan: Plan, onSave: (Plan) -> Unit, onBack: () -> Unit) {
     val ctx = LocalContext.current
     val density = LocalDensity.current.density
-    var p by remember { mutableStateOf(plan) }
+    var p by remember { mutableStateOf(plan.copy(floors = plan.floors.map { fl -> fl.copy(rooms = simplifyAll(normalize(fl.rooms))) })) }
     var fi by remember { mutableStateOf(0) }
     var selId by remember { mutableStateOf<String?>(null) }
     var selVert by remember { mutableStateOf<Pt?>(null) }
@@ -743,6 +743,15 @@ fun EditorScreen(plan: Plan, onSave: (Plan) -> Unit, onBack: () -> Unit) {
                     if (shellFixed) "Außenwand fest: Innenwände und Ecken lassen sich ändern, die Hülle bleibt stehen." else "Außenwand frei: auch die Hülle lässt sich ziehen.",
                     Toast.LENGTH_LONG
                 ).show()
+            }
+            BarButton("Wände glätten") {
+                val f = fl()
+                val before = f.rooms.sumOf { it.pts.size }
+                val cleaned = simplifyAll(normalize(f.rooms.filter { polyArea(it.pts) >= 0.05 }))
+                val removed = before - cleaned.sumOf { it.pts.size }
+                pushUndo()
+                putFloor(fiIdx(), f.copy(rooms = cleaned))
+                Toast.makeText(ctx, if (removed > 0) "$removed überflüssige Punkte entfernt." else "Keine überflüssigen Punkte gefunden.", Toast.LENGTH_LONG).show()
             }
             BarButton("Haus verschieben") {
                 resetTools()

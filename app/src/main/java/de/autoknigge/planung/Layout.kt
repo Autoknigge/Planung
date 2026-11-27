@@ -803,7 +803,7 @@ fun simplifyRoom(all: List<Room>, id: String): List<Room> = all.map { r ->
                 if (lab < 1e-9) continue
                 val dev = abs(cross(b.x - a.x, b.y - a.y, v.x - a.x, v.y - a.y)) / lab
                 val dot = (v.x - a.x) * (b.x - v.x) + (v.y - a.y) * (b.y - v.y)
-                if (dev < 0.03 && dot > 0 && others.none { samePt(it, v) }) {
+                if (dev < 0.05 && dot > 0 && others.none { samePt(it, v) }) {
                     pts = pts.filterIndexed { k, _ -> k != i }
                     changed = true
                     break
