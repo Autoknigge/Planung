@@ -491,7 +491,7 @@ fun EditorScreen(plan: Plan, onSave: (Plan) -> Unit, onBack: () -> Unit) {
                                                         var nx = snapTo(rawX, st)
                                                         var ny = snapTo(rawY, st)
                                                         if (t.kind == Kind.DOOR || t.kind == Kind.WINDOW) {
-                                                            val at = attachToWall(t.copy(x = nx, y = ny), p, f0, 1.5)
+                                                            val at = attachToWall(t.copy(x = nx, y = ny), p, f0, 100.0)
                                                             putFloor(gi, f0.copy(els = f0.els.map { if (it.id == t.id) at else it }))
                                                         } else {
                                                             if (snapOn) {

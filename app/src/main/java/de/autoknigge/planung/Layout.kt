@@ -479,7 +479,7 @@ private fun mergeShared(f0: Floor, a: String, b: String, tol: Double): Floor? {
     if (polyArea(loop) < MIN_AREA) return null
     val merged = ra.copy(pts = loop)
     val rooms = f.rooms.filter { it.id != b }.map { if (it.id == a) merged else it }
-    return f.copy(rooms = normalize(rooms, 0.03))
+    return f.copy(rooms = simplifyRoom(normalize(rooms, 0.03), a))
 }
 
 fun deleteRoom(f: Floor, id: String): Floor? = if (f.rooms.size < 2) null else f.copy(rooms = f.rooms.filter { it.id != id })
@@ -780,5 +780,34 @@ fun mergeRooms(f0: Floor, a: String, b: String): Floor? {
     if (loop.size < 3) return null
     val merged = ra.copy(pts = loop)
     val rooms = f.rooms.filter { it.id != b }.map { if (it.id == a) merged else it }
-    return f.copy(rooms = normalize(rooms, 0.03))
+    return f.copy(rooms = simplifyRoom(normalize(rooms, 0.03), a))
+}
+
+/** Überflüssige Punkte einer Wand entfernen: auf gerader Linie und von keinem anderen Raum gebraucht. */
+fun simplifyRoom(all: List<Room>, id: String): List<Room> = all.map { r ->
+    if (r.id != id) r
+    else {
+        val others = all.filter { it.id != id }.flatMap { it.pts }
+        var pts = r.pts
+        var changed = true
+        while (changed && pts.size > 3) {
+            changed = false
+            for (i in pts.indices) {
+                val a = pts[(i + pts.size - 1) % pts.size]
+                val v = pts[i]
+                val b = pts[(i + 1) % pts.size]
+                val la = hypot(v.x - a.x, v.y - a.y)
+                val lb = hypot(b.x - v.x, b.y - v.y)
+                if (la < 1e-9 || lb < 1e-9) continue
+                val sinA = abs(cross(v.x - a.x, v.y - a.y, b.x - v.x, b.y - v.y)) / (la * lb)
+                val dot = (v.x - a.x) * (b.x - v.x) + (v.y - a.y) * (b.y - v.y)
+                if (sinA < 0.003 && dot > 0 && others.none { samePt(it, v) }) {
+                    pts = pts.filterIndexed { k, _ -> k != i }
+                    changed = true
+                    break
+                }
+            }
+        }
+        r.copy(pts = pts)
+    }
 }
